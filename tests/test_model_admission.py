@@ -10,7 +10,7 @@ import threading
 import time
 import unittest
 
-import model_runtime_coordinator as mrc
+from backend.runtime import model_runtime_coordinator as mrc
 
 
 class _FakeAvailable:

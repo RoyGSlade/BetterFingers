@@ -159,7 +159,7 @@ def test_qa_covers_both_sides_of_the_flip():
 
 def test_privacy_registry_is_page_agnostic():
     """Wipe/export cover the same stores whichever page is loaded."""
-    categories = (ROOT / "data_categories.py").read_text(encoding="utf-8")
+    categories = (ROOT / "backend/privacy/data_categories.py").read_text(encoding="utf-8")
     assert "BF_UI" not in categories
     assert "signal-desk" not in categories and "index.html" not in categories, (
         "the privacy registry must describe stores, never renderer pages"

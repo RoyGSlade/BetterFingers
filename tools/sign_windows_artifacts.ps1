@@ -13,13 +13,14 @@ param(
     [string]$CorrelationId = "",
     [string]$ReportPath = "",
     [switch]$VerifyOnly,
-    [switch]$SkipAzureCliPreflight
+    [switch]$SkipAzureCliPreflight,
+    [switch]$PreserveValidSignatures
 )
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 $minimumSignToolVersion = [Version]"10.0.2261.755"
-$eligibleExtensions = @(".exe", ".dll", ".msi", ".msix")
+$eligibleExtensions = @(".exe", ".dll", ".pyd", ".node", ".msi", ".msix")
 
 function Resolve-ExistingFile {
     param(
@@ -117,12 +118,32 @@ function Get-ArtifactSigningInstallRoots {
 
     foreach ($pattern in $registryPatterns) {
         Get-ItemProperty -Path $pattern -ErrorAction SilentlyContinue |
-            Where-Object { [string]$_.DisplayName -match "Artifact Signing Client Tools" } |
+            Where-Object {
+                $displayNameProperty = $_.PSObject.Properties["DisplayName"]
+                $null -ne $displayNameProperty -and
+                    ([string]$displayNameProperty.Value -match "Artifact Signing Client Tools")
+            } |
             ForEach-Object {
-                if (-not [string]::IsNullOrWhiteSpace([string]$_.InstallLocation)) {
-                    $roots.Add([string]$_.InstallLocation)
-                } elseif (-not [string]::IsNullOrWhiteSpace([string]$_.DisplayIcon)) {
-                    $iconPath = ([string]$_.DisplayIcon).Trim('"').Split(',')[0]
+                # Uninstall records are an open registry schema. Under strict
+                # mode, reading an absent optional property directly is fatal,
+                # so resolve each value through the property collection.
+                $installLocationProperty = $_.PSObject.Properties["InstallLocation"]
+                $displayIconProperty = $_.PSObject.Properties["DisplayIcon"]
+                $installLocation = if ($null -eq $installLocationProperty) {
+                    ""
+                } else {
+                    [string]$installLocationProperty.Value
+                }
+                $displayIcon = if ($null -eq $displayIconProperty) {
+                    ""
+                } else {
+                    [string]$displayIconProperty.Value
+                }
+
+                if (-not [string]::IsNullOrWhiteSpace($installLocation)) {
+                    $roots.Add($installLocation)
+                } elseif (-not [string]::IsNullOrWhiteSpace($displayIcon)) {
+                    $iconPath = $displayIcon.Trim('"').Split(',')[0]
                     $roots.Add((Split-Path -Parent $iconPath))
                 }
             }
@@ -196,7 +217,7 @@ function Get-EligibleArtifacts {
             } else {
                 $extension = [IO.Path]::GetExtension($item.Path).ToLowerInvariant()
                 if ($eligibleExtensions -notcontains $extension) {
-                    throw "Artifact '$($item.Path)' is not an EXE, DLL, MSI, or MSIX file."
+                    throw "Artifact '$($item.Path)' is not an EXE, DLL, PYD, NODE, MSI, or MSIX file."
                 }
                 $targets.Add($item.Path)
             }
@@ -205,7 +226,7 @@ function Get-EligibleArtifacts {
 
     $uniqueTargets = @($targets | Sort-Object -Unique)
     if ($uniqueTargets.Count -eq 0) {
-        throw "No distributable EXE, DLL, MSI, or MSIX artifacts were found under the requested path(s)."
+        throw "No distributable EXE, DLL, PYD, NODE, MSI, or MSIX artifacts were found under the requested path(s)."
     }
     return $uniqueTargets
 }
@@ -234,11 +255,33 @@ function Assert-AzureCliSession {
     }
 }
 
+function Test-PreservableSignature {
+    param([string]$Target)
+
+    $signature = Get-AuthenticodeSignature -FilePath $Target
+    return (
+        $signature.Status -eq "Valid" -and
+        $null -ne $signature.SignerCertificate
+    )
+}
+
+function Test-IsBackendBundlePayload {
+    param([string]$Target)
+
+    $normalizedPath = [IO.Path]::GetFullPath($Target).Replace('/', '\')
+    $backendBundleMarker = "\resources\backend\betterfingers-backend\"
+    return $normalizedPath.IndexOf(
+        $backendBundleMarker,
+        [StringComparison]::OrdinalIgnoreCase
+    ) -ge 0
+}
+
 function Get-VerifiedSignatureRecord {
     param(
         [string]$Target,
         [string]$ResolvedSignToolPath,
-        [string]$RequiredSubject
+        [string]$RequiredSubject,
+        [bool]$RequireTimestamp = $true
     )
 
     Invoke-SignTool -ResolvedSignToolPath $ResolvedSignToolPath -Operation "verification for '$Target'" -Arguments @(
@@ -252,7 +295,7 @@ function Get-VerifiedSignatureRecord {
     if ($null -eq $signature.SignerCertificate) {
         throw "'$Target' has no signer certificate after SignTool reported success."
     }
-    if ($null -eq $signature.TimeStamperCertificate) {
+    if ($RequireTimestamp -and $null -eq $signature.TimeStamperCertificate) {
         throw "'$Target' has no RFC 3161 timestamp certificate; refusing a three-day Artifact Signing signature."
     }
 
@@ -266,8 +309,8 @@ function Get-VerifiedSignatureRecord {
         sha256 = (Get-FileHash -LiteralPath $Target -Algorithm SHA256).Hash.ToLowerInvariant()
         signerSubject = $subject
         signerThumbprint = [string]$signature.SignerCertificate.Thumbprint
-        timestampSubject = [string]$signature.TimeStamperCertificate.Subject
-        timestampThumbprint = [string]$signature.TimeStamperCertificate.Thumbprint
+        timestampSubject = if ($null -eq $signature.TimeStamperCertificate) { "" } else { [string]$signature.TimeStamperCertificate.Subject }
+        timestampThumbprint = if ($null -eq $signature.TimeStamperCertificate) { "" } else { [string]$signature.TimeStamperCertificate.Thumbprint }
     }
 }
 
@@ -289,10 +332,41 @@ $targets = @(Get-EligibleArtifacts -RequestedPaths $Path)
 Write-Host "Discovered $($targets.Count) eligible Windows artifact(s):"
 $targets | ForEach-Object { Write-Host "  $_" }
 
+$targetsToSign = @()
+$preservedTargets = @()
+$preservationEligibleTargets = @()
+$automaticBackendPreservationTargets = @()
+if (-not $VerifyOnly) {
+    foreach ($target in $targets) {
+        # electron-builder invokes this helper one file at a time. Backend
+        # files were already signed and fully reported before packaging, so a
+        # second signature would break the pre/post hash and signer identity
+        # gate. Preserve only the narrow resources/backend bundle path; normal
+        # Electron and installer targets retain the default re-sign behavior.
+        $useAutomaticBackendPreservation = (
+            -not $PreserveValidSignatures -and
+            (Test-IsBackendBundlePayload -Target $target)
+        )
+        if ($PreserveValidSignatures -or $useAutomaticBackendPreservation) {
+            $preservationEligibleTargets += $target
+        }
+        if ($useAutomaticBackendPreservation) {
+            $automaticBackendPreservationTargets += $target
+        }
+        if (($PreserveValidSignatures -or $useAutomaticBackendPreservation) -and
+            (Test-PreservableSignature -Target $target)) {
+            $preservedTargets += $target
+            Write-Host "Preserving valid upstream signature on $target"
+        } else {
+            $targetsToSign += $target
+        }
+    }
+}
+
 $metadataRoot = $null
 $metadataPath = $null
 try {
-    if (-not $VerifyOnly) {
+    if ($targetsToSign.Count -gt 0) {
         if (-not $SkipAzureCliPreflight) {
             Assert-AzureCliSession
         }
@@ -327,7 +401,7 @@ try {
             (New-Object Text.UTF8Encoding($false))
         )
 
-        foreach ($target in $targets) {
+        foreach ($target in $targetsToSign) {
             Write-Host "Signing $target"
             Invoke-SignTool -ResolvedSignToolPath $resolvedSignTool -Operation "signing for '$target'" -Arguments @(
                 "sign",
@@ -345,18 +419,54 @@ try {
 
     $records = New-Object System.Collections.Generic.List[object]
     $observedSubject = ""
+    $signedSubject = ""
     foreach ($target in $targets) {
-        $requiredSubject = if (-not [string]::IsNullOrWhiteSpace($ExpectedSignerSubject)) {
+        $wasSigned = $targetsToSign -contains $target
+        $preservationEnabledForTarget = (
+            $PreserveValidSignatures -or
+            ($preservationEligibleTargets -contains $target)
+        )
+        $requiredSubject = if ($preservationEnabledForTarget) {
+            if ($wasSigned -and -not [string]::IsNullOrWhiteSpace($ExpectedSignerSubject)) {
+                $ExpectedSignerSubject
+            } elseif ($wasSigned) {
+                $signedSubject
+            } else {
+                ""
+            }
+        } elseif (-not [string]::IsNullOrWhiteSpace($ExpectedSignerSubject)) {
             $ExpectedSignerSubject
         } else {
             $observedSubject
         }
-        $record = Get-VerifiedSignatureRecord -Target $target -ResolvedSignToolPath $resolvedSignTool -RequiredSubject $requiredSubject
+        $requireTimestamp = -not ($preservationEnabledForTarget -and -not $wasSigned)
+        $record = Get-VerifiedSignatureRecord `
+            -Target $target `
+            -ResolvedSignToolPath $resolvedSignTool `
+            -RequiredSubject $requiredSubject `
+            -RequireTimestamp $requireTimestamp
+        $record["verificationDisposition"] = if ($VerifyOnly) {
+            "verified"
+        } elseif ($wasSigned) {
+            "signed"
+        } else {
+            "preserved"
+        }
         if ([string]::IsNullOrWhiteSpace($observedSubject)) {
             $observedSubject = [string]$record.signerSubject
         }
+        if ($wasSigned -and [string]::IsNullOrWhiteSpace($signedSubject)) {
+            $signedSubject = [string]$record.signerSubject
+        }
         $records.Add($record)
     }
+
+    $signerSubjects = @($records |
+        ForEach-Object { [string]$_.signerSubject } |
+        Sort-Object -Unique)
+    $verifiedArtifacts = @($targets |
+        ForEach-Object { (Resolve-Path -LiteralPath $_).Path })
+    $classificationComplete = -not $VerifyOnly
 
     if (-not [string]::IsNullOrWhiteSpace($ReportPath)) {
         $reportDirectory = Split-Path -Parent ([IO.Path]::GetFullPath($ReportPath))
@@ -368,7 +478,26 @@ try {
             certificateProfileName = $CertificateProfileName
             endpoint = $Endpoint
             timestampUrl = $TimestampUrl
-            signerSubject = $observedSubject
+            operation = if ($VerifyOnly) { "verify-only" } else { "sign-and-verify" }
+            signerSubject = if ($PreserveValidSignatures) { $signedSubject } else { $observedSubject }
+            signerSubjects = $signerSubjects
+            preserveValidSignatures = [bool]$PreserveValidSignatures
+            automaticBackendPreservation = ($automaticBackendPreservationTargets.Count -gt 0)
+            automaticBackendPreservationArtifacts = @($automaticBackendPreservationTargets |
+                Where-Object { $preservedTargets -contains $_ } |
+                ForEach-Object { (Resolve-Path -LiteralPath $_).Path })
+            classificationComplete = $classificationComplete
+            verifiedArtifacts = $verifiedArtifacts
+            signedArtifacts = if ($classificationComplete) {
+                @($targetsToSign | ForEach-Object { (Resolve-Path -LiteralPath $_).Path })
+            } else {
+                $null
+            }
+            preservedArtifacts = if ($classificationComplete) {
+                @($preservedTargets | ForEach-Object { (Resolve-Path -LiteralPath $_).Path })
+            } else {
+                $null
+            }
             verifiedAtUtc = [DateTime]::UtcNow.ToString("o")
             artifacts = $records.ToArray()
         }
@@ -380,7 +509,11 @@ try {
         Write-Host "Wrote signing verification report to $([IO.Path]::GetFullPath($ReportPath))"
     }
 
-    Write-Host "Verified $($records.Count) Artifact Signing signature(s) with signer '$observedSubject'."
+    if ($PreserveValidSignatures -or $automaticBackendPreservationTargets.Count -gt 0) {
+        Write-Host "Verified $($records.Count) signature(s) across $($signerSubjects.Count) signer subject(s); signed $($targetsToSign.Count), preserved $($preservedTargets.Count)."
+    } else {
+        Write-Host "Verified $($records.Count) Artifact Signing signature(s) with signer '$observedSubject'."
+    }
 } finally {
     if ($null -ne $metadataRoot -and (Test-Path -LiteralPath $metadataRoot)) {
         Remove-Item -LiteralPath $metadataRoot -Recurse -Force

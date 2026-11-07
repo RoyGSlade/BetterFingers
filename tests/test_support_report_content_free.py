@@ -25,7 +25,7 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-import data_categories as dc
+from backend.privacy import data_categories as dc
 import server
 
 
@@ -39,10 +39,10 @@ class SupportReportContentFreeTests(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.root = pathlib.Path(self._tmp.name)
         patchers = [
-            patch("app_paths.resolve_base", return_value=self.root),
-            patch("utils.get_user_data_path", return_value=str(self.root)),
-            patch("history_store.get_user_data_path", return_value=str(self.root)),
-            patch("recordings.get_user_data_path", return_value=str(self.root)),
+            patch("backend.config.app_paths.resolve_base", return_value=self.root),
+            patch("backend.config.utils.get_user_data_path", return_value=str(self.root)),
+            patch("backend.stores.history_store.get_user_data_path", return_value=str(self.root)),
+            patch("backend.stores.recordings.get_user_data_path", return_value=str(self.root)),
             patch("server.get_user_data_path", return_value=str(self.root)),
             patch.dict(os.environ, {"BETTERFINGERS_LAZY_STARTUP": "1"}, clear=False),
         ]
@@ -71,7 +71,7 @@ class SupportReportContentFreeTests(unittest.TestCase):
             f"{MARKER}-persona", f"{MARKER}-raw", f"{MARKER}-final", consent=True)
         written.append("persona_learning")
 
-        import history_store
+        from backend.stores import history_store
         history_store.init()
         # No try/except here on purpose: an insert that silently fails would
         # make this suite report "no leak" about a store it never populated,
@@ -110,7 +110,7 @@ class SupportReportContentFreeTests(unittest.TestCase):
                       "would not have tested the field that makes it user text")
         written.append("stream_deck_config")
 
-        import data_paths
+        from backend.privacy import data_paths
         for name in ("draft_history.json", "macros.json", "dictionary.json",
                      "graph.json", "mcp_servers.json", "app_profiles.json",
                      "launcher_workflows.json", "application_registry.json",

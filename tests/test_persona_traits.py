@@ -10,8 +10,8 @@ invite invention, and that a trait never comes from anywhere but a slider.
 
 import pytest
 
-import llm_engine
-from persona_traits import (
+from backend.llm import llm_engine
+from backend.llm.persona_traits import (
     BAND_HIGH,
     BAND_LOW,
     BAND_NEUTRAL,
@@ -160,7 +160,7 @@ def test_traits_are_not_rendered_unless_the_caller_opts_in():
 
 
 def test_the_profile_toggle_defaults_off():
-    from utils import _profile_defaults, _sanitize_profile_values
+    from backend.config.utils import _profile_defaults, _sanitize_profile_values
 
     defaults = _profile_defaults()
     assert defaults["use_persona_traits"] is False

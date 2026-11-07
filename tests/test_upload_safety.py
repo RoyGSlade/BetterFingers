@@ -19,7 +19,7 @@ from scipy.io import wavfile
 from fastapi.testclient import TestClient
 
 import server
-import upload_safety as us
+from backend.privacy import upload_safety as us
 
 
 def _wav_bytes(seconds=0.1, rate=16000):

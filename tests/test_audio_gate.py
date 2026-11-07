@@ -2,8 +2,8 @@ import unittest
 
 import numpy as np
 
-from audio_gate import should_block_for_no_audio
-from recorder import RecordingResult
+from backend.audio.audio_gate import should_block_for_no_audio
+from backend.audio.recorder import RecordingResult
 
 
 class AudioGateTests(unittest.TestCase):

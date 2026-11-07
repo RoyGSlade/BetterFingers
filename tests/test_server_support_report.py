@@ -45,8 +45,8 @@ class SupportReportRouteTests(unittest.TestCase):
             for secret in (secret_context, "48213", "call them back", "call them back today"):
                 self.assertNotIn(secret, md)
         finally:
-            self.client.delete("/message-rescue/context")
-            self.client.delete("/personas/SupportReportTestPersona/examples")
+            self.client.delete("/message-rescue/context?confirm=true")
+            self.client.delete("/personas/SupportReportTestPersona/examples?confirm=true")
 
     def test_recent_errors_are_redacted(self):
         # A runtime error whose message carries a long multi-line string must be

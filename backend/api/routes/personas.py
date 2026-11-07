@@ -15,6 +15,8 @@ from fastapi import APIRouter, HTTPException
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
+from backend.api.models import ApprovalTicketModel
+from backend.services import approvals
 from backend.services import personas as persona_service
 from backend.services.persona_learning import PersonaLearningStore
 from backend.services import persona_drafts
@@ -44,8 +46,37 @@ _LEARNING_ERROR_STATUS = {
     "invalid_persona_name": 400,
     "consent_required": 400,
     "empty_example": 400,
+    "changed": 409,
     "write_failed": 500,
 }
+
+
+def _canonical(name: str) -> str:
+    """Round 4, item 1 (Codex re-check 3, finding 1): ONE canonical persona identity.
+
+    The store saves a persona under its sanitized name, so an alias like ``Sam!ple`` used to be
+    looked up as a NEW persona (no examples, nothing to approve) and then written over ``Sample``.
+    Every route now refuses a name that is not already its canonical form, with a 422 that names
+    the canonical suggestion; lookup, ticket subject, comparison and persistence all use it."""
+    raw = str(name if name is not None else "")
+    canonical = persona_service.canonical_name(raw)
+    if not canonical or canonical != raw:
+        raise HTTPException(status_code=422, detail={
+            "error": "noncanonical_persona_name",
+            "message": (f"Persona names may use letters, digits, spaces, '_', '-' and '.', with no space at "
+                        f"either end. Use '{canonical}' instead." if canonical
+                        else "A persona name needs at least one letter or digit."),
+            "canonical": canonical,
+        })
+    return canonical
+
+
+def _approval_http(exc: approvals.ApprovalError) -> HTTPException:
+    return HTTPException(status_code=approvals.http_status_for(exc.code), detail=exc.message)
+
+
+def _ticket(model) -> Optional[dict]:
+    return model.model_dump() if model is not None else None
 
 
 def _learning_store() -> PersonaLearningStore:
@@ -60,11 +91,13 @@ def _learning_store() -> PersonaLearningStore:
 class PersonaExampleRequest(BaseModel):
     raw: str = Field(..., min_length=1, max_length=MAX_LEARNING_EXAMPLE_CHARS)
     out: str = Field(..., min_length=1, max_length=MAX_LEARNING_EXAMPLE_CHARS)
-    # No default of True: every learn request must explicitly opt in. There
-    # is no persisted "this persona has consent" flag anywhere in the system
-    # (F2.6) -- omitting this field means consent=False, which the store
-    # rejects with consent_required rather than silently learning.
+    # DEPRECATED and ignored (Phase 0 item 1). A request boolean is not consent:
+    # any holder of the bearer token could send ``consent: true`` and poison every
+    # future rewrite with a persistent prompt injection. Consent is now a signed
+    # ticket from the Electron main process, minted only after a native dialog
+    # showed the person this exact persona and example (raw and result text).
     consent: bool = False
+    approval: Optional[ApprovalTicketModel] = None
 
 
 class PersonaRequest(BaseModel):
@@ -93,6 +126,8 @@ class PersonaRequest(BaseModel):
     revision: Optional[int] = None
     confirmed_revision: Optional[int] = None
     writing_preset_id: Optional[str] = None
+    # Required when this save changes the few-shot list in ANY way (round 3, item 3).
+    approval: Optional[ApprovalTicketModel] = None
 
 
 @router.get("/personas")
@@ -110,6 +145,7 @@ async def list_builtin_persona_names_route():
 @router.get("/personas/{name}")
 async def get_persona_route(name: str):
     """Return the full schema v2 persona dict for the editor."""
+    name = _canonical(name)
     entry = persona_service.get_persona(name)
     if entry is None:
         raise HTTPException(status_code=404, detail=f"Persona '{name}' not found.")
@@ -118,6 +154,7 @@ async def get_persona_route(name: str):
 
 @router.post("/personas")
 async def save_persona_route(request: PersonaRequest):
+    name = _canonical(request.name)
     # Build a v2 payload from the provided fields; drop unspecified ones so an
     # update preserves prior rich values (upsert_persona merges partial dicts).
     payload = {"prompt": request.prompt}
@@ -130,7 +167,32 @@ async def save_persona_route(request: PersonaRequest):
         value = getattr(request, key)
         if value is not None:
             payload[key] = value
-    ok, msg = persona_service.save_persona(request.name, payload)
+    # Few-shot examples steer every future rewrite, exactly like learned examples (round 2,
+    # item 4). Round 3, item 3: the COMPLETE ordered resulting list is what is authorized.
+    # Inference uses the first examples in order, so an addition, an edit, a removal, a
+    # reordering, a repeated copy and emptying the list all change behaviour, and each needs a
+    # ``persona.few_shot`` ticket bound to the stored list and the resulting list. Only a save
+    # that leaves the list exactly as stored needs nothing. What is stored is the normalised
+    # list the ticket covers.
+    #
+    # Round 4, item 1: the comparison and the verification run INSIDE the store lock, against the
+    # list stored at that moment, and the write follows under the same lock (compare-and-swap on
+    # the list): nothing can change the stored list between the check and the commit.
+    guard = None
+    if "few_shot" in payload:
+        after = approvals.few_shot_items(payload["few_shot"])
+        payload["few_shot"] = [{"raw": raw, "out": out} for raw, out in after]
+        ticket = _ticket(request.approval)
+
+        def guard(existing):
+            before = approvals.few_shot_items((existing or {}).get("few_shot"))
+            if after != before:
+                approvals.verify(ticket, purpose=approvals.PURPOSE_PERSONA_FEW_SHOT, subject=name,
+                                 bind=approvals.persona_few_shot_bind(name, before, after))
+    try:
+        ok, msg = persona_service.save_persona(name, payload, guard=guard)
+    except approvals.ApprovalError as exc:
+        raise _approval_http(exc)
     if not ok:
         raise HTTPException(status_code=400, detail=msg)
     return {"message": msg}
@@ -201,10 +263,6 @@ class PersonaConfirmRequest(BaseModel):
     structured: dict
 
 
-class PersonaRenameRequest(BaseModel):
-    new_name: str
-
-
 @router.get("/personas/{name}/editor")
 async def get_persona_editor_route(name: str):
     """Return confirmed structured data plus its separately persisted draft.
@@ -212,6 +270,7 @@ async def get_persona_editor_route(name: str):
     Legacy prompts are decomposed conservatively for review, but the persona
     registry is not changed until /confirm is called.
     """
+    name = _canonical(name)
     entry = persona_service.get_persona(name)
     if entry is None:
         raise HTTPException(status_code=404, detail=f"Persona '{name}' not found.")
@@ -229,6 +288,7 @@ async def get_persona_editor_route(name: str):
 
 @router.put("/personas/{name}/draft")
 async def save_persona_draft_route(name: str, request: PersonaDraftStateRequest):
+    name = _canonical(name)
     entry = persona_service.get_persona(name)
     if entry is None:
         raise HTTPException(status_code=404, detail=f"Persona '{name}' not found.")
@@ -245,6 +305,7 @@ async def save_persona_draft_route(name: str, request: PersonaDraftStateRequest)
 
 @router.delete("/personas/{name}/draft")
 async def discard_persona_draft_route(name: str):
+    name = _canonical(name)
     entry = persona_service.get_persona(name)
     if entry is None:
         raise HTTPException(status_code=404, detail=f"Persona '{name}' not found.")
@@ -255,6 +316,7 @@ async def discard_persona_draft_route(name: str):
 
 @router.post("/personas/{name}/confirm")
 async def confirm_persona_draft_route(name: str, request: PersonaConfirmRequest):
+    name = _canonical(name)
     entry = persona_service.get_persona(name)
     if entry is None:
         raise HTTPException(status_code=404, detail=f"Persona '{name}' not found.")
@@ -289,32 +351,18 @@ async def persona_field_guidance_route(field_path: str):
     return {"field_id": field_path, **guidance}
 
 
+# Round 5, item 2 (Codex re-check 4, blocker 2): renaming saved the whole entry, its approved
+# few-shot list included, under a new name and deleted the old one with no ticket and no native
+# preview, and left the learned examples (keyed by name) behind or merged them into whatever the
+# new name already had. Phase 0 turns renaming OFF rather than approve a transition nobody is
+# shown. The route stays so an old page gets a plain answer instead of a 404; it reads nothing
+# and writes nothing, whatever the request carries.
+PERSONA_RENAME_OFF = "Renaming is turned off for now; create a new persona and copy the voice."
+
+
 @router.post("/personas/{name}/rename")
-async def rename_persona_route(name: str, request: PersonaRenameRequest):
-    new_name = str(request.new_name or "").strip()
-    if not new_name:
-        raise HTTPException(status_code=400, detail="A new persona name is required.")
-    if persona_service.get_persona(new_name) is not None:
-        raise HTTPException(status_code=409, detail=f"Persona '{new_name}' already exists.")
-    entry = persona_service.get_persona(name)
-    if entry is None:
-        raise HTTPException(status_code=404, detail=f"Persona '{name}' not found.")
-    if name in persona_service.list_builtin_persona_names():
-        raise HTTPException(status_code=400, detail="Built-in personas cannot be renamed.")
-    entry = dict(entry)
-    if isinstance(entry.get("structured"), dict):
-        entry["structured"] = normalize_structured_persona(entry["structured"], display_name=new_name)
-        entry["structured"]["metadata"]["display_name"] = new_name
-    ok, msg = persona_service.save_persona(new_name, entry)
-    if not ok:
-        raise HTTPException(status_code=400, detail=msg)
-    ok, delete_msg = persona_service.delete_persona(name)
-    if not ok:
-        persona_service.delete_persona(new_name)
-        raise HTTPException(status_code=400, detail=delete_msg)
-    import server
-    server.reconcile_persona_profile_references(name, replacement=new_name)
-    return {"ok": True, "message": f"Renamed persona '{name}' to '{new_name}'.", "name": new_name}
+async def rename_persona_route(name: str):
+    raise HTTPException(status_code=403, detail=PERSONA_RENAME_OFF)
 
 
 class PersonaRefineRequest(BaseModel):
@@ -379,9 +427,26 @@ async def draft_persona_route(request: PersonaDraftRequest):
     return result
 
 
+class PersonaDeleteRequest(BaseModel):
+    approval: Optional[ApprovalTicketModel] = None
+
+
 @router.delete("/personas/{name}")
-async def delete_persona_route(name: str):
-    ok, msg = persona_service.delete_persona(name)
+async def delete_persona_route(name: str, request: Optional[PersonaDeleteRequest] = None):
+    """Delete a custom persona. Round 4, item 3 (Codex re-check 3, finding 3): this removes its
+    whole few-shot list, so it needs a ``persona.delete`` ticket from the native dialog that showed
+    that list, verified under the store lock against the list stored at that moment."""
+    name = _canonical(name)
+    ticket = _ticket(request.approval) if request else None
+
+    def guard(existing):
+        before = approvals.few_shot_items((existing or {}).get("few_shot"))
+        approvals.verify(ticket, purpose=approvals.PURPOSE_PERSONA_DELETE, subject=name,
+                         bind=approvals.persona_delete_bind(name, before))
+    try:
+        ok, msg = persona_service.delete_persona(name, guard=guard)
+    except approvals.ApprovalError as exc:
+        raise _approval_http(exc)
     if not ok:
         raise HTTPException(status_code=400, detail=msg)
     import server
@@ -403,28 +468,70 @@ async def list_persona_examples_route(name: str):
     """Every learned example for one persona. Explicitly requested by name,
     so (unlike a diagnostics/privacy view) this is allowed to include the
     example text, not just counts."""
+    name = _canonical(name)
     examples = await run_in_threadpool(_learning_store().list_examples, name)
     return {"persona": name, "examples": examples}
 
 
+@router.post("/personas/{name}/examples/preview")
+async def preview_persona_example_route(name: str, request: PersonaExampleRequest):
+    """What learning this example WOULD do, without doing it (round 4, item 5): the complete
+    learned list before and after, and any example the cap would evict. Main shows this in the
+    native dialog and binds its ticket to it."""
+    name = _canonical(name)
+    return await run_in_threadpool(_learning_store().plan_add, name, request.raw, request.out)
+
+
 @router.post("/personas/{name}/examples")
 async def add_persona_example_route(name: str, request: PersonaExampleRequest):
-    """Learn one new few-shot example for a persona. Requires consent=True on
-    this exact request -- there is no persisted consent flag to rely on."""
-    result = await run_in_threadpool(
-        _learning_store().add_example, name, request.raw, request.out,
-        consent=request.consent,
-    )
+    """Learn one new few-shot example for a persona. Requires a signed approval
+    for exactly this persona, raw text and result text (one-shot: there is no
+    persisted consent flag, and a request boolean does not count).
+
+    Round 4, item 5: the ticket also binds the complete learned list before and after, so an
+    example the cap evicts is part of what the person approved; the store computes the result,
+    the route verifies against it and the store writes it, all under the store lock."""
+    name = _canonical(name)
+    ticket = _ticket(request.approval)
+
+    def guard(before, after):
+        if after != before:
+            approvals.verify(ticket, purpose=approvals.PURPOSE_PERSONA_EXAMPLE, subject=name,
+                             bind=approvals.learned_add_bind(name, request.raw, request.out, before, after))
+    try:
+        result = await run_in_threadpool(
+            lambda: _learning_store().add_example(name, request.raw, request.out, consent=True, guard=guard))
+    except approvals.ApprovalError as exc:
+        raise _approval_http(exc)
     if not result["ok"]:
         status = _LEARNING_ERROR_STATUS.get(result["error"], 400)
         raise HTTPException(status_code=status, detail=result.get("message", result["error"]))
     return result
 
 
+class LearnedExampleDeleteRequest(BaseModel):
+    approval: Optional[ApprovalTicketModel] = None
+
+
 @router.delete("/personas/{name}/examples/{example_id}")
-async def delete_persona_example_route(name: str, example_id: str):
-    """Delete a single learned example by id."""
-    result = await run_in_threadpool(_learning_store().delete_example, name, example_id)
+async def delete_persona_example_route(name: str, example_id: str, request: Optional[LearnedExampleDeleteRequest] = None):
+    """Delete a single learned example by id. Round 3, item 3: removing a learned example
+    changes what the persona learns from, so it needs a ``persona.learned_delete`` ticket
+    bound to this example and the complete learned list before and after. Round 4: verified and
+    committed under the store lock, against the list stored at that moment."""
+    name = _canonical(name)
+    store = _learning_store()
+    ticket = _ticket(request.approval) if request else None
+
+    def guard(before, after):
+        if after == before:
+            raise HTTPException(status_code=404, detail="Learned example not found.")
+        approvals.verify(ticket, purpose=approvals.PURPOSE_PERSONA_LEARNED_DELETE, subject=name,
+                         bind=approvals.learned_delete_bind(name, example_id, before, after))
+    try:
+        result = await run_in_threadpool(lambda: store.delete_example(name, example_id, guard=guard))
+    except approvals.ApprovalError as exc:
+        raise _approval_http(exc)
     if not result["ok"]:
         status = _LEARNING_ERROR_STATUS.get(result["error"], 500)
         raise HTTPException(status_code=status, detail=result.get("message", result["error"]))
@@ -433,12 +540,29 @@ async def delete_persona_example_route(name: str, example_id: str):
     return result
 
 
+class LearnedClearRequest(BaseModel):
+    approval: Optional[ApprovalTicketModel] = None
+
+
 @router.delete("/personas/{name}/examples")
-async def clear_persona_examples_route(name: str):
-    """Privacy clear: delete every learned example for one persona. The
-    persona key is dropped, not blacklisted -- a later learn (with fresh
-    consent) recreates it."""
-    result = await run_in_threadpool(_learning_store().clear_persona, name)
+async def clear_persona_examples_route(name: str, request: Optional[LearnedClearRequest] = None):
+    """Delete every learned example for one persona. The persona key is dropped, not blacklisted
+    -- a later learn (with fresh consent) recreates it.
+
+    Round 4, item 3 (Codex re-check 3, finding 3): ``?confirm=true`` used to be the whole gate,
+    and a request flag is not a tap. This changes what the persona learns from, so it needs a
+    ``persona.learned_clear`` ticket from the native dialog that showed the persona and its
+    examples, bound to the complete list and verified under the store lock."""
+    name = _canonical(name)
+    ticket = _ticket(request.approval) if request else None
+
+    def guard(before):
+        approvals.verify(ticket, purpose=approvals.PURPOSE_PERSONA_LEARNED_CLEAR, subject=name,
+                         bind=approvals.learned_clear_bind(name, before))
+    try:
+        result = await run_in_threadpool(lambda: _learning_store().clear_persona(name, guard=guard))
+    except approvals.ApprovalError as exc:
+        raise _approval_http(exc)
     if not result["ok"]:
         status = _LEARNING_ERROR_STATUS.get(result["error"], 500)
         raise HTTPException(status_code=status, detail=result.get("message", result["error"]))

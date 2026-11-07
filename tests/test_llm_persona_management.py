@@ -3,8 +3,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-import llm_engine
-from llm_engine import (
+from backend.llm import llm_engine
+from backend.llm.llm_engine import (
     LLMEngine,
     compose_persona_messages,
     compose_persona_system_prompt,

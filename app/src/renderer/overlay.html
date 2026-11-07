@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' http://127.0.0.1:* ws://127.0.0.1:* http://localhost:* ws://localhost:*; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; media-src 'self' blob: data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'" />
     <title>BetterFingers Overlay</title>
     <!-- Signal Desk design tokens + shared component classes (SPEC 2/7). See
          styles/signal-desk.css's "OVERLAYS" section for .sd-capture-*. -->
@@ -37,6 +37,11 @@
       .sd-capture-wrap.pos-above { flex-direction: column-reverse; gap: 2px; }
       .sd-capture-wrap.pos-below { flex-direction: column; gap: 2px; }
       /* "Across the centre" -- overlay the label on top of the ring's middle. */
+      /* Signal Engineer face (appearance.face === 'signal-engineer'). */
+      .se-face { display: none; line-height: 0; }
+      .se-face svg { width: 100%; height: 100%; display: block; overflow: visible; }
+      .sd-capture-wrap.face-se .se-face { display: block; }
+      .sd-capture-wrap.face-se .sd-capture-ring { display: none; }
       .sd-capture-wrap.pos-center .sd-capture-label {
         position: absolute;
         left: 50%;
@@ -49,16 +54,24 @@
   <body>
     <div class="sd-capture-wrap" id="overlayWrap">
       <canvas id="statusRing" class="sd-capture-ring" width="70" height="70" style="width: 70px; height: 70px;"></canvas>
+      <div id="seFace" class="se-face" aria-hidden="true"></div>
       <div id="statusText" class="sd-capture-label hidden" data-ring-state="idle">Press Alt + Space to capture</div>
     </div>
 
     <script type="module">
       import { createSignalCore } from './signalCore.js';
       import { interpretOverlayStatus } from './lib/overlayStatus.mjs';
+      import { createSignalEngineerFace } from './lib/signalEngineerFace.mjs';
+      import { FACE_SHELLS, faceAspect } from './lib/signalEngineerAssets.js';
 
       const wrap = document.getElementById('overlayWrap');
       const canvas = document.getElementById('statusRing');
       const textEl = document.getElementById('statusText');
+      const faceEl = document.getElementById('seFace');
+      // Created on first use so ring users never pay for the face.
+      let face = null;
+      let faceShell = null;
+      let lastRingState = 'idle';
 
       // Signal Core is the Signal Desk's canonical HUD ring (cyan/teal
       // segmented arcs -- SPEC 4/7), reused here instead of glitch-ring.js so
@@ -95,25 +108,61 @@
         const vibrancy = typeof a?.vibrancy === 'number' ? Math.max(0.3, Math.min(2, a.vibrancy)) : 1;
         canvas.style.filter = vibrancy === 1 ? '' : `brightness(${vibrancy})`;
         const pos = POSITIONS.has(a?.labelPos) ? a.labelPos : 'hidden';
-        wrap.className = 'sd-capture-wrap' + (pos !== 'hidden' ? ' pos-' + pos : '');
+        const shell = FACE_SHELLS[a?.face] || null; // 'ring' (or unknown) -> no face
+        wrap.className = 'sd-capture-wrap' + (pos !== 'hidden' ? ' pos-' + pos : '') + (shell ? ' face-se' : '');
         textEl.classList.toggle('hidden', pos === 'hidden');
+        if (face && shell !== faceShell) {
+          face.destroy();
+          face = null;
+        }
+        if (shell) {
+          faceEl.style.height = px + 'px';
+          faceEl.style.width = Math.round(px * faceAspect(shell.spec)) + 'px';
+          faceEl.style.filter = canvas.style.filter;
+          if (!face) {
+            face = createSignalEngineerFace({ container: faceEl, spec: shell.spec, partUrls: shell.partUrls, idPrefix: 'ovl' });
+            face.setRingState(lastRingState);
+            faceShell = shell;
+          }
+        } else {
+          faceShell = null;
+        }
       }
 
       window.betterFingersOverlay?.onStatusUpdate((update) => {
         const payload = typeof update === 'string' ? { status: update } : (update || {});
         const status = payload.status || 'unknown';
+        // Read-aloud loudness for the chunk that is starting to play: the face
+        // lip-syncs to it. It is not a state change, so the ring, label and
+        // expression stay as they are.
+        if (status === 'draft_tts_level') {
+          face?.playEnvelope(payload.envelope, payload.fps);
+          return;
+        }
         const { ring: ringState, text: label } = interpretOverlayStatus(status, payload);
         ring.setState(ringState);
+        lastRingState = ringState;
+        // Read-aloud start/stop is not a mood change: keep whatever expression
+        // he has (e.g. the emotion the assistant picked for this reply).
+        if (!status.startsWith('draft_tts_')) face?.setRingState(ringState);
+        // The assistant can pick his expression per reply (talk_speaking etc.).
+        if (payload.emotion) face?.setExpression(payload.emotion);
+        // Talking: synthetic rhythm until the first real loudness envelope
+        // arrives (SAPI voices never send one).
+        if (status === 'draft_tts_started' || status === 'talk_speaking') face?.setSpeaking(true, { synthetic: true });
+        else if (status !== 'unknown') face?.setSpeaking(false);
         // Presentation-only hook: colors the label pill (and its dot) per
         // ring state via signal-desk.css's [data-ring-state] rules. Does not
         // affect the ring itself or any IPC/backend behavior.
         textEl.dataset.ringState = ringState;
         textEl.textContent = label;
         // Live mic RMS (when the backend includes it) pulses the ring + wave.
-        if (status === 'recording' && typeof payload.amplitude === 'number') {
+        if ((status === 'recording' || status === 'talk_listening') && typeof payload.amplitude === 'number') {
           ring.setAmplitude(payload.amplitude);
+          face?.setLevel(payload.amplitude);
         } else {
           ring.setAmplitude(null);
+          face?.setLevel(0);
         }
       });
 

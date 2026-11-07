@@ -2,8 +2,8 @@ import unittest
 
 import numpy as np
 
-import wake_training_data as wtd
-import wake_trainer as wt
+from backend.wake import wake_training_data as wtd
+from backend.wake import wake_trainer as wt
 
 
 class _StubScorer:
@@ -89,7 +89,9 @@ class BuildTrainingSetTests(unittest.TestCase):
         pos_clip = np.full(4000, 1.0, dtype=np.float32)
         train_pos, _, _, _ = wtd.build_training_set(
             "hey fingers", ["v1"], _synth, _make_scorer,
-            user_positive_clips=[pos_clip], negative_phrases=("hello there",), speeds=(1.0,),
+            user_positive_clips=[pos_clip],
+            negative_phrases=("hello there", "what time is it"),
+            speeds=(1.0,),
         )
         self.assertGreater(train_pos.shape[0], 0)
 
@@ -98,6 +100,29 @@ class BuildTrainingSetTests(unittest.TestCase):
             wtd.build_training_set(
                 "hey fingers", [], lambda *a: None, _make_scorer,
                 negative_phrases=("hello there",),
+            )
+
+    def test_overlapping_windows_from_one_utterance_never_cross_split(self):
+        groups = [
+            np.full((5, 16, 96), marker, dtype=np.float32)
+            for marker in (1.0, 2.0, 3.0, 4.0)
+        ]
+
+        train, held_out = wtd._split_groups(groups, 0.25, seed=7, label="positive")
+
+        train_markers = set(np.unique(train[:, 0, 0]).tolist())
+        held_out_markers = set(np.unique(held_out[:, 0, 0]).tolist())
+        self.assertTrue(train_markers)
+        self.assertTrue(held_out_markers)
+        self.assertTrue(train_markers.isdisjoint(held_out_markers))
+
+    def test_one_utterance_cannot_claim_leakage_free_evaluation(self):
+        with self.assertRaisesRegex(ValueError, "two independent positive utterances"):
+            wtd._split_groups(
+                [np.ones((5, 16, 96), dtype=np.float32)],
+                0.25,
+                seed=0,
+                label="positive",
             )
 
 

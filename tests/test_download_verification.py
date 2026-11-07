@@ -12,7 +12,7 @@ import tempfile
 import unittest
 from unittest.mock import patch, MagicMock
 
-import model_manager as mm
+from backend.models import model_manager as mm
 
 
 def _fake_response(payload: bytes):

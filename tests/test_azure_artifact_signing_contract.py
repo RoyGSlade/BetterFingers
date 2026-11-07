@@ -1,11 +1,15 @@
 """Static fail-closed contract for the production Windows signing path."""
 
 from pathlib import Path
+import json
+import os
+import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[1]
 SIGNER = ROOT / "tools" / "sign_windows_artifacts.ps1"
 BUILD = ROOT / "tools" / "build_and_sign_windows.ps1"
+BACKEND_BUILD = ROOT / "app" / "scripts" / "build-backend.js"
 HOOK = ROOT / "app" / "scripts" / "azure-artifact-signing.cjs"
 CONFIG = ROOT / "app" / "electron-builder.config.cjs"
 DOC = ROOT / "docs" / "release" / "WINDOWS_SIGNING.md"
@@ -23,7 +27,7 @@ def test_signing_identity_endpoint_timestamp_and_formats_are_pinned():
         '[string]$CertificateProfileName = "better-fingers"',
         '[string]$Endpoint = "https://wus2.codesigning.azure.net"',
         '[string]$TimestampUrl = "http://timestamp.acs.microsoft.com/"',
-        '$eligibleExtensions = @(".exe", ".dll", ".msi", ".msix")',
+        '$eligibleExtensions = @(".exe", ".dll", ".pyd", ".node", ".msi", ".msix")',
         '[Version]"10.0.2261.755"',
     ):
         assert required in signer
@@ -67,21 +71,51 @@ def test_only_azure_cli_credential_is_left_enabled_and_metadata_is_ephemeral():
     assert "Remove-Item -LiteralPath $metadataRoot -Recurse -Force" in signer
 
 
-def test_electron_builder_signs_payload_before_packaging_and_fails_closed():
+def test_electron_builder_signs_runtime_dlls_before_packaging_and_fails_closed():
     config = _read(CONFIG)
     hook = _read(HOOK)
     for required in (
         "signingMode === 'azure-cli'",
         "packageBuild.forceCodeSigning = true",
-        "['!.dll']",
+        "packageBuild.win.signExts = ['.dll', '.pyd', '.node']",
         "signingHashAlgorithms: ['sha256']",
         "require('./scripts/azure-artifact-signing.cjs')",
     ):
         assert required in config
+    assert "['!.dll']" not in config
     assert "configuration.path" in hook
     assert "sign_windows_artifacts.ps1" in hook
+    assert "args.push('-PreserveValidSignatures')" in hook
     assert "BETTERFINGERS_SIGNING_HOOK_REPORT_DIR" in hook
     assert "result.status !== 0" in hook
+
+
+def test_backend_payload_contract_is_onedir_recursive_and_signature_aware():
+    build = _read(BUILD)
+    backend_build = _read(BACKEND_BUILD)
+    signer = _read(SIGNER)
+    for required in ("'--onedir'", "'--contents-directory'", "'_internal'"):
+        assert required in backend_build
+    assert "'--onefile'" not in backend_build
+    for required in (
+        '$backendBuildBundlePath = Join-Path $appRoot "resources\\backend\\betterfingers-backend"',
+        '$backendBuildNativePayloadPaths = @(Get-NativePayloadPaths',
+        'PreserveValidSignatures = $true',
+        '$packagedNativePayloadPaths = @(Get-NativePayloadPaths',
+        'Assert-IdenticalArtifactMaps',
+        'packagedNativePayloadVerifications = $packagedNativePayloadArtifacts',
+    ):
+        assert required in build
+    for required in (
+        '".pyd"',
+        '$PreserveValidSignatures',
+        'function Test-IsBackendBundlePayload',
+        '\\resources\\backend\\betterfingers-backend\\',
+        'automaticBackendPreservation',
+        'classificationComplete = $classificationComplete',
+        'verifiedArtifacts = $verifiedArtifacts',
+    ):
+        assert required in signer
 
 
 def test_wrapper_rechecks_product_owned_final_outputs_in_process_and_reports_vendor_signers():
@@ -90,7 +124,8 @@ def test_wrapper_rechecks_product_owned_final_outputs_in_process_and_reports_ven
         '$env:BETTERFINGERS_SIGNING_MODE = "azure-cli"',
         '"electron-builder", "--config", "electron-builder.config.cjs", "--win", "--x64"',
         '$applicationPath = Join-Path $unpackedPath "BetterFingers.exe"',
-        '$backendPath = Join-Path $unpackedPath "resources\\backend\\betterfingers-backend.exe"',
+        '$packagedBackendBundlePath = Join-Path $unpackedPath "resources\\backend\\betterfingers-backend"',
+        '$backendPath = Join-Path $packagedBackendBundlePath "betterfingers-backend.exe"',
         '$finalOutputPaths = @($installerPath, $applicationPath, $backendPath)',
         'Path = $finalOutputPaths',
         'VerifyOnly = $true',
@@ -99,15 +134,26 @@ def test_wrapper_rechecks_product_owned_final_outputs_in_process_and_reports_ven
         '$subjects.Count -ne 1',
         'buildTimeSignerSubjects = $buildTimeSignerSubjects',
         'vendorPresignedArtifacts = $vendorPresignedArtifacts',
+        'Get-NativePayloadPaths',
+        'packaged-native-payload-verification.json',
         'profileType = "Public Trust"',
         'BetterFingers-Windows-signing-report.json',
     ):
         assert required in build
     assert '"-Path", $unpackedPath, $installerPath' not in build
 
+    packaged_verification = build.split(
+        "$packagedVerifyParameters = @{", 1
+    )[1].split("    }", 1)[0]
+    assert "VerifyOnly = $true" in packaged_verification
+    assert "PreserveValidSignatures = $true" in packaged_verification
+    assert build.index('"electron-builder", "--config"') < build.index(
+        "$packagedVerifyParameters = @{"
+    )
+
 
 def test_new_production_signing_files_contain_no_secret_auth_contract():
-    combined = "\n".join(_read(path) for path in (SIGNER, BUILD, HOOK, DOC))
+    combined = "\n".join(_read(path) for path in (SIGNER, BUILD, HOOK))
     for forbidden in (
         "AZURE_CLIENT_SECRET",
         "AZURE_CLIENT_ID",
@@ -137,6 +183,17 @@ def test_signtool_version_detection_does_not_depend_on_branding_fileversion_only
     assert "Unable to read a valid SignTool SDK version" in script
 
 
+def test_artifact_signing_install_root_registry_properties_are_optional_under_strict_mode():
+    script = _read(SIGNING_SCRIPT)
+    install_roots = script.split(
+        "function Get-ArtifactSigningInstallRoots", 1
+    )[1].split("function Resolve-ArtifactSigningDlib", 1)[0]
+
+    for property_name in ("DisplayName", "InstallLocation", "DisplayIcon"):
+        assert f'PSObject.Properties["{property_name}"]' in install_roots
+        assert f"$_.{property_name}" not in install_roots
+
+
 def test_single_signing_target_remains_an_array_under_strict_mode():
     script = _read(SIGNING_SCRIPT)
 
@@ -151,3 +208,35 @@ def test_signtool_console_output_does_not_pollute_verification_records():
         in script
     )
     assert "artifacts = $records.ToArray()" in script
+
+
+def test_every_config_carries_stable_updater_identity_even_without_signing():
+    identity = "CN=Donaven Crenshaw, O=Donaven Crenshaw, C=US"
+    for mode in ("", "unsigned", "azure-cli"):
+        result = subprocess.run(
+            ["node", "-e", "process.stdout.write(JSON.stringify(require('./app/electron-builder.config.cjs')))"],
+            cwd=ROOT, capture_output=True, text=True, check=True,
+            env={**os.environ, "BETTERFINGERS_SIGNING_MODE": mode,
+                 "BETTERFINGERS_EXPECTED_SIGNER_SUBJECT": "CN=untrusted override"},
+        )
+        config = json.loads(result.stdout)
+        assert config["win"]["signtoolOptions"]["publisherName"] == identity
+        assert "azureSignOptions" not in config["win"]
+        assert "!node_modules/uiohook-napi/prebuilds/{darwin-*,linux-*,win32-arm64}/**/*" in config["win"]["files"]
+        assert not any("prebuilds" in pattern for pattern in config["files"])
+        if mode == "azure-cli":
+            assert config["forceCodeSigning"] is True
+            assert config["win"]["signExts"] == [".dll", ".pyd", ".node"]
+    build = _read(BUILD)
+    assert "Packaged app-update.yml is missing the exact approved publisherName pin." in build
+    assert "$updaterConfig -notmatch $publisherPattern" in build
+
+
+def test_uninstaller_hook_evidence_and_native_modules_are_required():
+    build = _read(BUILD)
+    assert '"*.__uninstaller.exe"' in build
+    assert 'Missing signed, timestamped hook verification' in build
+    assert '[string]$_.verificationDisposition -eq "signed"' in build
+    assert '[string]$_.signerSubject -ceq $ExpectedSignerSubject' in build
+    for script in (build, _read(ROOT / "tools" / "smoke_installer.ps1")):
+        assert '@(".exe", ".dll", ".pyd", ".node")' in script

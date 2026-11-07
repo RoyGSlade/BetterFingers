@@ -20,9 +20,9 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-import data_categories as dc
-import data_lifecycle as dl
-import data_registry as dr
+from backend.privacy import data_categories as dc
+from backend.privacy import data_lifecycle as dl
+from backend.privacy import data_registry as dr
 
 
 class _PopulatedRootMixin(unittest.TestCase):
@@ -31,10 +31,10 @@ class _PopulatedRootMixin(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.root = pathlib.Path(self._tmp.name)
         patchers = [
-            patch("app_paths.resolve_base", return_value=self.root),
-            patch("utils.get_user_data_path", return_value=str(self.root)),
-            patch("history_store.get_user_data_path", return_value=str(self.root)),
-            patch("recordings.get_user_data_path", return_value=str(self.root)),
+            patch("backend.config.app_paths.resolve_base", return_value=self.root),
+            patch("backend.config.utils.get_user_data_path", return_value=str(self.root)),
+            patch("backend.stores.history_store.get_user_data_path", return_value=str(self.root)),
+            patch("backend.stores.recordings.get_user_data_path", return_value=str(self.root)),
             patch("server.get_user_data_path", return_value=str(self.root)),
         ]
         for p in patchers:
@@ -46,7 +46,7 @@ class _PopulatedRootMixin(unittest.TestCase):
     def populate(self):
         """Write one real file for every category that lives under the root,
         so a mode has something to delete and 'ok' cannot be vacuous."""
-        import data_paths
+        from backend.privacy import data_paths
         made = {}
         for category in self.registry.all():
             if category.id == "downloaded_models":
@@ -73,7 +73,7 @@ def _candidates(fn):
     data_paths deliberately filters to what is really on disk, which makes it
     impossible to ask "where would this go?" without intercepting the filter.
     """
-    import data_paths
+    from backend.privacy import data_paths
     real = data_paths._existing
     seen = []
 
@@ -210,7 +210,7 @@ class ModeExecutionTests(_PopulatedRootMixin):
         def _boom(path):
             raise OSError("permission denied")
 
-        with patch("data_lifecycle._remove", _boom):
+        with patch("backend.privacy.data_lifecycle._remove", _boom):
             result = dl.execute_mode(self.registry, dr.WIPE_MODE_CONVERSATIONS)
         self.assertFalse(result["ok"])
         self.assertTrue(result["failed"])

@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import Mock, patch
 
-from llm_engine import LLMEngine
+from backend.llm.llm_engine import LLMEngine
 
 
 class LLMEngineTokenLimitTests(unittest.TestCase):
@@ -10,7 +10,7 @@ class LLMEngineTokenLimitTests(unittest.TestCase):
         engine.api_url = "http://127.0.0.1:8080"
         return engine
 
-    @patch("llm_engine.requests.post")
+    @patch("backend.llm.llm_engine.requests.post")
     def test_call_api_uses_explicit_max_output_tokens(self, post_mock):
         fake_response = Mock()
         fake_response.raise_for_status.return_value = None
@@ -24,7 +24,7 @@ class LLMEngineTokenLimitTests(unittest.TestCase):
         payload = post_mock.call_args.kwargs["json"]
         self.assertEqual(payload["max_tokens"], 777)
 
-    @patch("llm_engine.requests.post")
+    @patch("backend.llm.llm_engine.requests.post")
     def test_call_api_clamps_small_max_tokens(self, post_mock):
         fake_response = Mock()
         fake_response.raise_for_status.return_value = None

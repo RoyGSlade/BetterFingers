@@ -106,12 +106,12 @@ class WipeRouteIntegrationTests(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         patchers = [
-            patch("recordings.get_user_data_path", return_value=self._tmp.name),
-            patch("history_store.get_user_data_path", return_value=self._tmp.name),
+            patch("backend.stores.recordings.get_user_data_path", return_value=self._tmp.name),
+            patch("backend.stores.history_store.get_user_data_path", return_value=self._tmp.name),
             patch("server.get_user_data_path", return_value=self._tmp.name),
             # PersonaLearningStore resolves its path via utils.get_user_data_path
             # directly, not a server.py-bound copy -- see test_privacy_wipe_verified.py.
-            patch("utils.get_user_data_path", return_value=self._tmp.name),
+            patch("backend.config.utils.get_user_data_path", return_value=self._tmp.name),
             patch.object(server, "save_draft_history"),
             patch.object(server, "broadcast_status_threadsafe"),
         ]
@@ -126,7 +126,7 @@ class WipeRouteIntegrationTests(unittest.TestCase):
         self.client = TestClient(server.app)
 
     def test_empty_wipe_is_200_and_ok(self):
-        import history_store
+        from backend.stores import history_store
         history_store.init()
         resp = self.client.post("/privacy/wipe", json={"wipe_voices": False})
         self.assertEqual(resp.status_code, 200, resp.json())
@@ -134,7 +134,7 @@ class WipeRouteIntegrationTests(unittest.TestCase):
 
     def test_populated_wipe_is_200_and_ok(self):
         import os
-        import history_store
+        from backend.stores import history_store
         history_store.init()
         directory = server.recordings.get_recordings_dir()
         with open(os.path.join(directory, "orphan.wav"), "w") as fh:
@@ -148,7 +148,7 @@ class WipeRouteIntegrationTests(unittest.TestCase):
 
     def test_history_db_recreation_failure_returns_500(self):
         # Failure injection (Phase 1.3): the DB could not be wiped/recreated.
-        import history_store
+        from backend.stores import history_store
         history_store.init()
         with patch.object(server.history_store, "wipe_database",
                           return_value={"ok": False, "recreated": False, "removed": []}):
@@ -162,7 +162,7 @@ class WipeRouteIntegrationTests(unittest.TestCase):
         # Failure injection (Phase 1.3): rmtree silently no-ops, so the voices
         # dir remains and the voices_absent postcondition cannot hold.
         import os
-        import history_store
+        from backend.stores import history_store
         history_store.init()
         voices_dir = server.ensure_voices_dir()
         with open(os.path.join(str(voices_dir), "cloned_Me.wav"), "w") as fh:

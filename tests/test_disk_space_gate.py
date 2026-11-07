@@ -23,7 +23,7 @@ import types
 import unittest
 from unittest.mock import MagicMock, patch
 
-import model_manager as mm
+from backend.models import model_manager as mm
 
 
 def _fake_disk_usage(total, free):
@@ -141,9 +141,9 @@ class CheckAndDownloadResourcesDiskGateTests(unittest.TestCase):
         self.model_id = mm.DEFAULT_MODEL
         self.model_path = os.path.join(self._tmp.name, mm.AVAILABLE_MODELS[self.model_id]["filename"])
         self._patches = [
-            patch("model_manager.get_models_dir", return_value=self._tmp.name),
-            patch("model_manager.get_model_path", return_value=self.model_path),
-            patch("model_manager.get_server_path", return_value=os.path.join(self._tmp.name, "llama-server")),
+            patch("backend.models.model_manager.get_models_dir", return_value=self._tmp.name),
+            patch("backend.models.model_manager.get_model_path", return_value=self.model_path),
+            patch("backend.models.model_manager.get_server_path", return_value=os.path.join(self._tmp.name, "llama-server")),
         ]
         for p in self._patches:
             p.start()
@@ -151,9 +151,9 @@ class CheckAndDownloadResourcesDiskGateTests(unittest.TestCase):
 
     def test_refuses_before_calling_download_file_when_disk_is_short(self):
         with patch.object(mm.shutil, "disk_usage", return_value=_fake_disk_usage(1024, 0)), patch(
-            "model_manager.download_file"
+            "backend.models.model_manager.download_file"
         ) as download_file:
-            result = mm.check_and_download_resources(model_id=self.model_id)
+            result = mm.check_and_download_resources(model_id=self.model_id, allow_download=True)
 
         download_file.assert_not_called()
         self.assertFalse(result["ok"])
@@ -187,10 +187,10 @@ class CheckAndDownloadResourcesDiskGateTests(unittest.TestCase):
         with patch.dict(os.environ, {"BETTERFINGERS_ALLOW_TINY_MODELS": "1"}), patch.object(
             mm.shutil, "disk_usage", return_value=_fake_disk_usage(100 * one_gb, 100 * one_gb)
         ), patch(
-            "model_manager.validate_llama_server_runtime",
+            "backend.models.model_manager.validate_llama_server_runtime",
             return_value={"ok": True, "build": 999999},
-        ), patch("model_manager.download_file", side_effect=fake_download_file) as download_file:
-            result = mm.check_and_download_resources(model_id=self.model_id)
+        ), patch("backend.models.model_manager.download_file", side_effect=fake_download_file) as download_file:
+            result = mm.check_and_download_resources(model_id=self.model_id, allow_download=True)
 
         # Only the model is downloaded; the present+valid server skips runtime install.
         download_file.assert_called_once()

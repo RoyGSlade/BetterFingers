@@ -78,9 +78,10 @@ export function summarizeLlmState(llmModels) {
 }
 
 // GET /models/whisper's payload -> the pieces the checklist cares about.
-// "Ready" only requires SOME installed Whisper model, not necessarily the
-// currently-selected one -- the app can still transcribe with any installed
-// model even if the selected one was since removed.
+// "Ready" requires the SELECTED model to be installed: speech loads are
+// local-only, so dictation loads exactly the selected model and never falls
+// back to (or downloads) another one. `anyInstalled`/`installedCount` are
+// informational only and must not decide readiness.
 export function summarizeWhisperState(whisperModels) {
   const models = Array.isArray(whisperModels?.models) ? whisperModels.models : [];
   const selectedSize = whisperModels?.selected_model_size ?? null;
@@ -108,7 +109,7 @@ export function computeFirstRunStatus({ health, runtime, llmModels, whisperModel
   const llmEnabled = runtime?.llm_enabled !== false;
   const runtimeReady = llm.runtimeExists;
   const llmReady = llm.installed && (llm.ready || Boolean(runtime?.llm_ready));
-  const whisperReady = whisper.selectedInstalled || whisper.anyInstalled;
+  const whisperReady = whisper.selectedInstalled;
 
   const missing = [];
   if (!backendReachable) {
@@ -131,7 +132,12 @@ export function computeFirstRunStatus({ health, runtime, llmModels, whisperModel
     }
   }
   if (!whisperReady) {
-    missing.push({ key: 'whisper', label: 'No speech-to-text (Whisper) model is installed.' });
+    missing.push({
+      key: 'whisper',
+      label: whisper.selectedSize
+        ? `The selected speech-to-text (Whisper) model "${whisper.selectedSize}" is not installed.`
+        : 'No speech-to-text (Whisper) model is installed.',
+    });
   }
 
   const ready = backendReachable && whisperReady && (!llmEnabled || (runtimeReady && llmReady));
@@ -367,9 +373,11 @@ export function createFirstRunFeature({
 
     setBadge(els.whisperBadgeEl, status.whisper.ready ? 'Installed' : 'Missing', status.whisper.ready ? 'success' : 'danger');
     if (els.whisperDetailEl) {
-      els.whisperDetailEl.textContent = status.whisper.installedCount
-        ? `${status.whisper.installedCount} model(s) installed`
-        : 'None installed';
+      els.whisperDetailEl.textContent = status.whisper.ready
+        ? `${status.whisper.selectedSize} installed`
+        : status.whisper.selectedSize
+          ? `Selected model "${status.whisper.selectedSize}" is not installed${status.whisper.installedCount ? ` (${status.whisper.installedCount} other model(s) installed)` : ''}`
+          : 'None installed';
     }
 
     setBadge(els.overallBadgeEl, status.ready ? 'Ready' : 'Setup needed', status.ready ? 'success' : 'warning');

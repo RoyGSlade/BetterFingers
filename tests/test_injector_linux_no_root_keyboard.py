@@ -17,12 +17,12 @@ without ever touching `keyboard`.
 import unittest
 from unittest.mock import MagicMock, patch
 
-import injector as injector_mod
-from injector import InputInjector
+from backend.output import injector as injector_mod
+from backend.output.injector import InputInjector
 
 
 def _make_injector(method):
-    with patch("injector.load_profile", return_value={}):
+    with patch("backend.output.injector.load_profile", return_value={}):
         inj = InputInjector(profile_name="Default")
     inj.injection_method = method
     return inj
@@ -39,7 +39,7 @@ class SendPasteHotkeyLinuxTests(unittest.TestCase):
 
     def test_xdotool_sends_ctrl_v_via_tool(self):
         inj = _make_injector("xdotool")
-        with patch("injector._run_type_tool", return_value=True) as run_tool, patch.object(
+        with patch("backend.output.injector._run_type_tool", return_value=True) as run_tool, patch.object(
             injector_mod, "keyboard"
         ) as keyboard_mock:
             inj._send_paste_hotkey()
@@ -51,7 +51,7 @@ class SendPasteHotkeyLinuxTests(unittest.TestCase):
 
     def test_wtype_sends_ctrl_v_via_modifiers(self):
         inj = _make_injector("wtype")
-        with patch("injector._run_type_tool", return_value=True) as run_tool, patch.object(
+        with patch("backend.output.injector._run_type_tool", return_value=True) as run_tool, patch.object(
             injector_mod, "keyboard"
         ) as keyboard_mock:
             inj._send_paste_hotkey()
@@ -61,7 +61,7 @@ class SendPasteHotkeyLinuxTests(unittest.TestCase):
 
     def test_ydotool_sends_ctrl_v_via_keycodes(self):
         inj = _make_injector("ydotool")
-        with patch("injector._run_type_tool", return_value=True) as run_tool, patch.object(
+        with patch("backend.output.injector._run_type_tool", return_value=True) as run_tool, patch.object(
             injector_mod, "keyboard"
         ) as keyboard_mock:
             inj._send_paste_hotkey()
@@ -82,7 +82,7 @@ class SendPasteHotkeyLinuxTests(unittest.TestCase):
 
     def test_tool_failure_degrades_honestly_without_keyboard(self):
         inj = _make_injector("xdotool")
-        with patch("injector._run_type_tool", return_value=False), patch.object(
+        with patch("backend.output.injector._run_type_tool", return_value=False), patch.object(
             injector_mod, "keyboard"
         ) as keyboard_mock, self.assertLogs(level="WARNING") as logs:
             inj._send_paste_hotkey()  # must not raise
@@ -101,7 +101,7 @@ class PressKeyLinuxTests(unittest.TestCase):
 
     def test_xdotool_sends_key_via_tool(self):
         inj = _make_injector("xdotool")
-        with patch("injector._run_type_tool", return_value=True) as run_tool, patch.object(
+        with patch("backend.output.injector._run_type_tool", return_value=True) as run_tool, patch.object(
             injector_mod, "keyboard"
         ) as keyboard_mock:
             inj._press_key("enter")
@@ -112,7 +112,7 @@ class PressKeyLinuxTests(unittest.TestCase):
 
     def test_wtype_sends_key_via_tool(self):
         inj = _make_injector("wtype")
-        with patch("injector._run_type_tool", return_value=True) as run_tool, patch.object(
+        with patch("backend.output.injector._run_type_tool", return_value=True) as run_tool, patch.object(
             injector_mod, "keyboard"
         ) as keyboard_mock:
             inj._press_key("esc")
@@ -122,7 +122,7 @@ class PressKeyLinuxTests(unittest.TestCase):
 
     def test_wtype_sends_modifier_combo_via_hold_release_flags(self):
         inj = _make_injector("wtype")
-        with patch("injector._run_type_tool", return_value=True) as run_tool, patch.object(
+        with patch("backend.output.injector._run_type_tool", return_value=True) as run_tool, patch.object(
             injector_mod, "keyboard"
         ) as keyboard_mock:
             inj._press_key("ctrl+alt+r")
@@ -132,7 +132,7 @@ class PressKeyLinuxTests(unittest.TestCase):
 
     def test_ydotool_sends_key_via_keycodes(self):
         inj = _make_injector("ydotool")
-        with patch("injector._run_type_tool", return_value=True) as run_tool, patch.object(
+        with patch("backend.output.injector._run_type_tool", return_value=True) as run_tool, patch.object(
             injector_mod, "keyboard"
         ) as keyboard_mock:
             inj._press_key("f10")
@@ -142,7 +142,7 @@ class PressKeyLinuxTests(unittest.TestCase):
 
     def test_ydotool_unmapped_key_degrades_without_keyboard(self):
         inj = _make_injector("ydotool")
-        with patch("injector._run_type_tool") as run_tool, patch.object(
+        with patch("backend.output.injector._run_type_tool") as run_tool, patch.object(
             injector_mod, "keyboard"
         ) as keyboard_mock, self.assertLogs(level="WARNING") as logs:
             inj._press_key("f13")  # not in the modest ydotool keycode table
@@ -161,7 +161,7 @@ class PressKeyLinuxTests(unittest.TestCase):
 
     def test_tool_failure_degrades_honestly_without_keyboard(self):
         inj = _make_injector("xdotool")
-        with patch("injector._run_type_tool", return_value=False), patch.object(
+        with patch("backend.output.injector._run_type_tool", return_value=False), patch.object(
             injector_mod, "keyboard"
         ) as keyboard_mock, self.assertLogs(level="WARNING") as logs:
             inj._press_key("enter")  # must not raise

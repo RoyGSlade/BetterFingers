@@ -55,7 +55,7 @@ class InjectionLockingTests(unittest.TestCase):
 
     def test_concurrent_sends_do_not_overlap(self):
         caps = {"supports_input_injection": True, "platform": "linux", "session_type": "x11"}
-        with patch("injector.InputInjector", _RecordingInjector), \
+        with patch("backend.output.injector.InputInjector", _RecordingInjector), \
              patch.object(server, "get_capabilities", return_value=caps), \
              patch.object(server, "get_profile_output_settings",
                           return_value={"auto_submit": False, "chat_close_action": "none",

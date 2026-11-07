@@ -1,8 +1,8 @@
 import unittest
 from unittest.mock import patch
 
-import injector as injector_mod
-from injector import InputInjector
+from backend.output import injector as injector_mod
+from backend.output.injector import InputInjector
 
 
 class InjectorMuteKeyTests(unittest.TestCase):
@@ -13,10 +13,10 @@ class InjectorMuteKeyTests(unittest.TestCase):
         p.start()
         self.addCleanup(p.stop)
 
-    @patch("injector.keyboard.release")
-    @patch("injector.keyboard.press")
+    @patch("backend.output.injector.keyboard.release")
+    @patch("backend.output.injector.keyboard.press")
     @patch(
-        "injector.load_profile",
+        "backend.output.injector.load_profile",
         side_effect=[
             {"audio_ducking": True, "voice_mute_key": "f10"},
             {"audio_ducking": False, "voice_mute_key": "f10"},
@@ -35,10 +35,10 @@ class InjectorMuteKeyTests(unittest.TestCase):
         press_key.assert_called_once_with("f10")
         release_key.assert_called_once_with("f10")
 
-    @patch("injector.keyboard.release")
-    @patch("injector.keyboard.press")
+    @patch("backend.output.injector.keyboard.release")
+    @patch("backend.output.injector.keyboard.press")
     @patch(
-        "injector.load_profile",
+        "backend.output.injector.load_profile",
         return_value={"audio_ducking": True, "voice_mute_key": "f11"},
     )
     def test_release_uses_held_state_not_current_config(
@@ -55,9 +55,9 @@ class InjectorMuteKeyTests(unittest.TestCase):
         press_key.assert_called_once_with("f11")
         release_key.assert_called_once_with("f11")
 
-    @patch("injector.keyboard.press")
+    @patch("backend.output.injector.keyboard.press")
     @patch(
-        "injector.load_profile",
+        "backend.output.injector.load_profile",
         return_value={"audio_ducking": True, "voice_mute_key": "f12"},
     )
     def test_hold_is_idempotent_while_key_is_held(self, _load_profile, press_key):
@@ -84,14 +84,14 @@ class InjectorMuteKeyLinuxTests(unittest.TestCase):
             "audio_ducking": True,
             "voice_mute_key": "f10",
         }
-        with patch("injector.load_profile", return_value=config):
+        with patch("backend.output.injector.load_profile", return_value=config):
             inj = InputInjector(profile_name="Default")
         inj.injection_method = method
         return inj
 
     def test_xdotool_holds_and_releases_via_keydown_keyup(self):
         inj = self._make_injector("xdotool")
-        with patch("injector._run_type_tool", return_value=True) as run_tool, patch.object(
+        with patch("backend.output.injector._run_type_tool", return_value=True) as run_tool, patch.object(
             injector_mod, "keyboard"
         ) as keyboard_mock:
             inj.hold_mute_key()
@@ -108,7 +108,7 @@ class InjectorMuteKeyLinuxTests(unittest.TestCase):
 
     def test_wtype_holds_and_releases_via_dash_p(self):
         inj = self._make_injector("wtype")
-        with patch("injector._run_type_tool", return_value=True) as run_tool, patch.object(
+        with patch("backend.output.injector._run_type_tool", return_value=True) as run_tool, patch.object(
             injector_mod, "keyboard"
         ) as keyboard_mock:
             inj.hold_mute_key()
@@ -125,7 +125,7 @@ class InjectorMuteKeyLinuxTests(unittest.TestCase):
 
     def test_ydotool_holds_and_releases_via_keycode(self):
         inj = self._make_injector("ydotool")
-        with patch("injector._run_type_tool", return_value=True) as run_tool, patch.object(
+        with patch("backend.output.injector._run_type_tool", return_value=True) as run_tool, patch.object(
             injector_mod, "keyboard"
         ) as keyboard_mock:
             inj.hold_mute_key()
@@ -153,7 +153,7 @@ class InjectorMuteKeyLinuxTests(unittest.TestCase):
 
     def test_hold_is_idempotent_while_key_is_held(self):
         inj = self._make_injector("xdotool")
-        with patch("injector._run_type_tool", return_value=True) as run_tool, patch.object(
+        with patch("backend.output.injector._run_type_tool", return_value=True) as run_tool, patch.object(
             injector_mod, "keyboard"
         ):
             inj.hold_mute_key()
@@ -171,7 +171,7 @@ class InjectorVoicePrivacyModeTests(unittest.TestCase):
         self.addCleanup(p.stop)
 
     def _injector(self, config):
-        with patch("injector.load_profile", return_value=config):
+        with patch("backend.output.injector.load_profile", return_value=config):
             return InputInjector(profile_name="Default")
 
     def _binding_for(self, config):
@@ -233,14 +233,14 @@ class InjectorVoicePrivacyModeTests(unittest.TestCase):
 
     # -- end to end --------------------------------------------------
 
-    @patch("injector.keyboard.release")
-    @patch("injector.keyboard.press")
+    @patch("backend.output.injector.keyboard.release")
+    @patch("backend.output.injector.keyboard.press")
     def test_switching_privacy_off_releases_a_held_key_on_reload(self, press_key, release_key):
         configs = [
             {"voice_privacy": {"mode": "push_to_mute", "mute_binding": "f10"}},
             {"voice_privacy": {"mode": "off", "mute_binding": "f10"}},
         ]
-        with patch("injector.load_profile", side_effect=configs):
+        with patch("backend.output.injector.load_profile", side_effect=configs):
             injector = InputInjector(profile_name="Default")
             injector.hold_mute_key()
             injector.reload_config(profile_name="Default")

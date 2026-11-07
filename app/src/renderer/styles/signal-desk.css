@@ -43,7 +43,7 @@
 
   --sd-text-primary: #E8EEF4;
   --sd-text-secondary: #94A3B8;
-  --sd-text-muted: #5B6B7C;
+  --sd-text-muted: #7F8EA2;
 
   /* Section labels: uppercase, tracked. Was a straight copy of --sd-text-muted
      (#5B6B7C), which computes to 3.20-3.54:1 against every surface token this
@@ -7352,4 +7352,70 @@ select.settings-input {
 .sd-voice-studio__hint b {
   color: var(--sd-text-secondary);
   font-weight: 500;
+}
+
+/* --- Reviewed bug-report flow --------------------------------------------
+   The modal reuses the shared guided-flow shell. These rules only widen the
+   card and make the immutable, text-only preview easy to inspect. */
+.sd-bug-report__card {
+  width: min(780px, 100%);
+  max-height: min(90vh, 840px);
+}
+
+.sd-bug-report__body,
+.sd-bug-report__fields {
+  display: grid;
+  gap: var(--sd-space-16);
+}
+
+.sd-bug-report__two-column {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sd-space-16);
+}
+
+.sd-bug-report__prepare-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sd-space-12);
+  flex-wrap: wrap;
+  color: var(--sd-text-muted);
+  font-size: var(--sd-font-sm);
+}
+
+.sd-bug-report__preview {
+  box-sizing: border-box;
+  max-height: 320px;
+  margin: 0;
+  padding: var(--sd-space-16);
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border: 1px solid var(--sd-border);
+  border-radius: var(--sd-radius-card);
+  background: var(--sd-surface-inset);
+  color: var(--sd-text-primary);
+  font: 12px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.sd-bug-report__preview[hidden] { display: none; }
+
+.sd-bug-report__consent {
+  padding: var(--sd-space-12);
+  border: 1px solid var(--sd-border);
+  border-radius: var(--sd-radius-card);
+  background: var(--sd-surface-inset);
+}
+
+.sd-bug-report__status {
+  min-height: 1.5em;
+  margin: 0;
+  color: var(--sd-text-secondary);
+}
+
+.sd-bug-report__status[data-error="true"] { color: var(--sd-red); }
+
+@media (max-width: 680px) {
+  .sd-bug-report__two-column { grid-template-columns: 1fr; }
+  .sd-bug-report { padding: var(--sd-space-12); }
 }

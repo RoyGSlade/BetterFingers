@@ -53,9 +53,40 @@ function loadUiohook() {
   return uiohook;
 }
 
+// The send hotkey does not approve anything. Pressing it hands the press to this
+// handler (installed by ipc.js: approvalBroker.placeFromHotkey), which opens the
+// native approval dialog for the draft text main fetched from the backend. A key
+// press proves nothing about what a person reviewed, and a page can choose the key
+// (round 2, item 2), so the press is a request for a dialog, never a signature.
+let primaryActionHandler = null;
+function setPrimaryActionHandler(fn) {
+  primaryActionHandler = typeof fn === 'function' ? fn : null;
+}
+
+async function triggerPrimaryAction() {
+  const { getDisplayedReviewDraft, isReviewWindowVisible } = require('./windows');
+  const visible = typeof isReviewWindowVisible === 'function' && isReviewWindowVisible();
+  const displayed = getDisplayedReviewDraft();
+  if (!primaryActionHandler) {
+    console.warn('Send hotkey pressed but no approval handler is installed; nothing was placed.');
+    return;
+  }
+  // Only WHICH draft the review window believes it shows is passed on; its claim about
+  // the text is dropped, and main shows the backend's text instead.
+  const result = await primaryActionHandler({
+    displayedDraftId: displayed ? displayed.displayed_draft_id : null,
+    reviewVisible: Boolean(visible),
+  });
+  if (result && result.ok === false && result.error) console.warn(`Send hotkey: ${result.error}`);
+}
+
 function triggerBackendAction(endpoint) {
   if (!authToken) {
     console.error(`Cannot trigger ${endpoint}: authToken is not set.`);
+    return;
+  }
+  if (endpoint === EP_PRIMARY) {
+    triggerPrimaryAction().catch((error) => console.error('Primary action hotkey failed:', error));
     return;
   }
 
@@ -68,7 +99,6 @@ function triggerBackendAction(endpoint) {
   });
 
   request.setHeader('Authorization', `Bearer ${authToken}`);
-
   request.on('response', (response) => {
     if (response.statusCode !== 200) {
       console.warn(`Hotkey triggered ${endpoint} but backend returned ${response.statusCode}`);
@@ -367,6 +397,7 @@ function getHotkeyCapabilities() {
 }
 
 module.exports = {
+  setPrimaryActionHandler,
   registerHotkeys,
   unregisterAllHotkeys,
   restoreActiveHotkeys,

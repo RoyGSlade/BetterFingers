@@ -4,7 +4,7 @@ Phase 5: optional stitch pass over multi-chunk output."""
 import unittest
 from unittest.mock import patch
 
-from llm_engine import LLMEngine, split_text_for_llm_chunks
+from backend.llm.llm_engine import LLMEngine, split_text_for_llm_chunks
 
 
 class SplitTextForLLMChunksTest(unittest.TestCase):

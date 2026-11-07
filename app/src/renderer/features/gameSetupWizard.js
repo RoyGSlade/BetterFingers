@@ -1,8 +1,8 @@
 // Game setup wizard (Wave 10, deliverable 3) — Utilities › Advanced › Game Setup.
 //
-// Seven steps, in this order, because the order is the safety property:
+// Setup steps, in this order, because the order is the safety property:
 //
-//   detect -> dictation binding -> command binding -> game chat key
+//   detect -> dictation binding -> command binding
 //   -> delivery choice -> anti-cheat warning -> rehearsal -> save
 //
 // THE REHEARSAL CAN NEVER SEND. That is the requirement, and it is enforced
@@ -21,10 +21,8 @@
 //      pressing Save, and cannot reach `rehearsal` at all until the warning has
 //      been acknowledged.
 //
-// WHY A CHAT KEY IS RECORDED AND NOT DETECTED. Every game opens its chat with a
-// different key and no game tells anybody which. Asking the user is the only
-// honest way to know, and it is also the only way that does not involve reading
-// the focused window's contents.
+// The profile schema has no game-chat key field. Do not collect a setting the
+// store would drop: the user opens the game's chat with their own keyboard.
 //
 // THE ANTI-CHEAT WARNING IS NOT DISMISSIBLE BY DEFAULT. Anti-cheat systems
 // classify synthetic keystrokes as input automation; some ban for it. The
@@ -42,7 +40,6 @@ export const WIZARD_ELEMENT_IDS = {
   recordCommandButton: 'sdUtilGameSetupRecordCommand',
   dictationValue: 'sdUtilGameSetupDictationValue',
   commandValue: 'sdUtilGameSetupCommandValue',
-  chatKeyInput: 'sdUtilGameSetupChatKey',
   deliverySelect: 'sdUtilGameSetupDelivery',
   warning: 'sdUtilGameSetupWarning',
   acknowledge: 'sdUtilGameSetupAcknowledge',
@@ -61,12 +58,11 @@ const REQUIRED_API_METHODS = [
   'saveAppProfile',
 ];
 
-/** The seven steps, in order. Exported so the UI cannot invent an eighth. */
+/** The supported setup steps, followed by the saved state. */
 export const STEPS = [
   'detect',
   'dictation',
   'command',
-  'chat_key',
   'delivery',
   'warning',
   'rehearsal',
@@ -153,7 +149,6 @@ export function computeWizardState(state = {}) {
   const hasDevice = Boolean(state.deviceKey);
   const hasDictation = Boolean(state.dictationBinding);
   const hasCommand = Boolean(state.commandBinding);
-  const hasChatKey = Boolean(String(state.chatKey || '').trim());
   const mode = state.delivery || DEFAULT_DELIVERY;
   const known = Boolean(DELIVERY_MODES[mode]);
   // The acknowledgement is only REQUIRED for the risky mode, but it is always
@@ -163,11 +158,10 @@ export function computeWizardState(state = {}) {
 
   let step = 'detect';
   if (state.saved) step = 'saved';
-  else if (hasDevice && hasDictation && hasCommand && hasChatKey && known && warningSatisfied) {
+  else if (hasDevice && hasDictation && hasCommand && known && warningSatisfied) {
     step = 'rehearsal';
-  } else if (hasDevice && hasDictation && hasCommand && hasChatKey && known) step = 'warning';
-  else if (hasDevice && hasDictation && hasCommand && hasChatKey) step = 'delivery';
-  else if (hasDevice && hasDictation && hasCommand) step = 'chat_key';
+  } else if (hasDevice && hasDictation && hasCommand && known) step = 'warning';
+  else if (hasDevice && hasDictation && hasCommand) step = 'delivery';
   else if (hasDevice && hasDictation) step = 'command';
   else if (hasDevice) step = 'dictation';
 
@@ -179,7 +173,7 @@ export function computeWizardState(state = {}) {
     // finish the wizard having bound only one, and you cannot bind them to the
     // same thing without the second recording overwriting the first visibly.
     canRecordCommand: hasDevice && hasDictation,
-    canChooseDelivery: hasDevice && hasDictation && hasCommand && hasChatKey,
+    canChooseDelivery: hasDevice && hasDictation && hasCommand,
     needsWarning: deliveryNeedsWarning(mode),
     warningSatisfied,
     canRehearse: step === 'rehearsal' || step === 'saved',
@@ -212,6 +206,8 @@ export function buildProfile(state = {}) {
   if (state.commandBinding) bindings['command.begin'] = state.commandBinding;
   return {
     id: state.profileId || 'game',
+    // gaming_policy.is_gaming_profile opts in only through this preset.
+    performance_preset: 'minimal',
     injection_policy: DELIVERY_MODES[state.delivery] ? state.delivery : DEFAULT_DELIVERY,
     match: { process_names: state.processNames || [], window_patterns: [] },
     bindings,
@@ -254,7 +250,6 @@ export function createGameSetupWizardFeature({ elements = {}, api = {}, onMessag
     devices: [],
     dictationBinding: null,
     commandBinding: null,
-    chatKey: '',
     delivery: DEFAULT_DELIVERY,
     acknowledged: false,
     rehearsed: false,
@@ -395,11 +390,6 @@ export function createGameSetupWizardFeature({ elements = {}, api = {}, onMessag
     return row;
   }
 
-  function setChatKey(value) {
-    state.chatKey = String(value || '').trim();
-    render();
-  }
-
   function setDelivery(mode) {
     state.delivery = DELIVERY_MODES[mode] ? mode : DEFAULT_DELIVERY;
     // Changing the mode retracts the acknowledgement. A tick made against
@@ -478,8 +468,6 @@ export function createGameSetupWizardFeature({ elements = {}, api = {}, onMessag
     elements.detectButton?.addEventListener?.('click', () => detect());
     elements.recordDictationButton?.addEventListener?.('click', () => record('dictation.begin'));
     elements.recordCommandButton?.addEventListener?.('click', () => record('command.begin'));
-    elements.chatKeyInput?.addEventListener?.('change', (event) =>
-      setChatKey(event?.target?.value ?? elements.chatKeyInput.value));
     elements.deliverySelect?.addEventListener?.('change', (event) =>
       setDelivery(event?.target?.value ?? elements.deliverySelect.value));
     elements.acknowledge?.addEventListener?.('change', (event) =>
@@ -504,7 +492,6 @@ export function createGameSetupWizardFeature({ elements = {}, api = {}, onMessag
     init,
     detect,
     record,
-    setChatKey,
     setDelivery,
     acknowledge,
     rehearse,

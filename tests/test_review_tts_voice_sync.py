@@ -14,7 +14,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 import server
-import utils
+from backend.config import utils
 
 
 class ProfileDefaultsIncludeVoiceStudioFieldsTests(unittest.TestCase):

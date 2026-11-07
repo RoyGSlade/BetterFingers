@@ -37,6 +37,7 @@ function defaultState() {
     consent_version: CURRENT_CONSENT_VERSION,
     accepted: false,
     accepted_at: null,
+    automatic_updates: false,
     completed_steps: [],
   };
 }
@@ -64,18 +65,16 @@ function normalize(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     return defaultState();
   }
-  if (raw.schema_version !== undefined) {
-    if (typeof raw.schema_version !== 'number' || raw.schema_version > SCHEMA_VERSION) {
-      return defaultState();
-    }
-  }
+  // Only the documented v1 format is evidence of durable acceptance.
+  // Missing, negative, fractional and future schemas have unknown provenance.
+  if (raw.schema_version !== SCHEMA_VERSION) return defaultState();
 
   const accepted = raw.accepted === true;
   // An accepted record with a missing/malformed consent_version is of
   // UNKNOWN provenance — normalizing it to CURRENT_CONSENT_VERSION would let
   // it silently satisfy a future consent-version bump (the exact fail-open
   // this store exists to prevent). Normalize to 0 instead, which never
-  // satisfies needsConsent's `>= currentConsentVersion` check, so it always
+  // satisfies needsConsent's exact current-version check, so it always
   // re-prompts. The never-accepted default state is unaffected by this and
   // keeps CURRENT_CONSENT_VERSION (inert; needsConsent only looks at
   // consent_version when accepted === true), matching the documented
@@ -83,6 +82,7 @@ function normalize(raw) {
   const consentVersion = Number.isFinite(raw.consent_version)
     ? raw.consent_version
     : (accepted ? 0 : CURRENT_CONSENT_VERSION);
+  if (!Number.isInteger(consentVersion) || consentVersion < 0 || consentVersion > CURRENT_CONSENT_VERSION) return defaultState();
   const acceptedAt = accepted && typeof raw.accepted_at === 'string' ? raw.accepted_at : null;
   const completedSteps = Array.isArray(raw.completed_steps)
     ? dedupeStable(raw.completed_steps.filter((s) => typeof s === 'string'))
@@ -93,6 +93,14 @@ function normalize(raw) {
     consent_version: consentVersion,
     accepted,
     accepted_at: acceptedAt,
+    // A readable, previously accepted v1 record without this field comes
+    // from the old always-check build. Preserve that effective behavior.
+    // Every fresh write includes false, so accepting consent later cannot
+    // accidentally turn a new install into a legacy install.
+    automatic_updates: typeof raw.automatic_updates === 'boolean'
+      ? raw.automatic_updates
+      : (!Object.hasOwn(raw, 'automatic_updates') && raw.schema_version === SCHEMA_VERSION
+        && accepted && consentVersion === CURRENT_CONSENT_VERSION),
     completed_steps: completedSteps,
   };
 }
@@ -171,7 +179,7 @@ function readState({ root = resolveUserDataRoot() } = {}) {
 }
 
 function needsConsent(state, currentConsentVersion = CURRENT_CONSENT_VERSION) {
-  return !(state && state.accepted === true && state.consent_version >= currentConsentVersion);
+  return !(state && state.accepted === true && state.consent_version === currentConsentVersion);
 }
 
 // Returns { ok, state, error? }. `state` reflects the intended new record
@@ -196,9 +204,19 @@ function recordAcceptance({
   return result.ok ? { ok: true, state } : { ok: false, state, error: result.error };
 }
 
-// Returns { ok, state, error? }. ok is true (with no write performed) when
-// the step was already recorded — idempotent, not a failure. Same gating
-// rule as recordAcceptance: a false ok means the append did not persist.
+// Persist an explicit boolean only after durable consent. A failed write
+// reports the unchanged effective state rather than claiming opt-in worked.
+function recordAutomaticUpdates(enabled, { root = resolveUserDataRoot() } = {}) {
+  const current = readState({ root });
+  if (typeof enabled !== 'boolean') return { ok: false, state: current, error: 'INVALID_PREFERENCE' };
+  if (needsConsent(current)) return { ok: false, state: current, error: 'CONSENT_REQUIRED' };
+  const state = { ...current, automatic_updates: enabled };
+  const result = atomicWriteJSON(root, state);
+  return result.ok ? { ok: true, state } : { ok: false, state: current, error: 'PREFERENCE_SAVE_FAILED' };
+}
+
+// Returns { ok, state, error? }. An already recorded step is idempotent.
+// As with acceptance, callers must gate on ok before claiming persistence.
 function recordStepComplete(stepId, { root = resolveUserDataRoot() } = {}) {
   const current = readState({ root });
   if (current.completed_steps.includes(stepId)) {
@@ -236,6 +254,7 @@ function migrateLegacyCompletion({ legacyComplete, root = resolveUserDataRoot(),
   const state = {
     schema_version: SCHEMA_VERSION,
     consent_version: 1,
+    automatic_updates: true,
     accepted: true,
     accepted_at: now().toISOString(),
     completed_steps: [],
@@ -266,6 +285,7 @@ module.exports = {
   readState,
   needsConsent,
   recordAcceptance,
+  recordAutomaticUpdates,
   recordStepComplete,
   migrateLegacyCompletion,
   clearForFactoryReset,

@@ -11,10 +11,10 @@ from unittest.mock import patch
 
 import numpy as np
 
-import recorder as recorder_mod
-import utils
-from audio_gate import TrailingSilenceDetector
-from hotkey_manager import HotkeyManager
+from backend.audio import recorder as recorder_mod
+from backend.config import utils
+from backend.audio.audio_gate import TrailingSilenceDetector
+from backend.input.hotkey_manager import HotkeyManager
 
 SPEECH = (0.2, 0.5)   # (rms, peak) — above thresholds
 SILENCE = (0.0, 0.0)  # (rms, peak) — below thresholds
@@ -157,7 +157,7 @@ class RecorderAutoStopTests(unittest.TestCase):
 
 
 class HotkeyAutoStopTests(unittest.TestCase):
-    @patch("hotkey_manager.load_profile")
+    @patch("backend.input.hotkey_manager.load_profile")
     def test_on_auto_stop_stops_when_recording(self, load_profile):
         load_profile.return_value = _hotkey_config()
         completed = []
@@ -173,7 +173,7 @@ class HotkeyAutoStopTests(unittest.TestCase):
         self.assertEqual(manager.last_stop_reason, "trailing_silence")
         self.assertEqual(len(completed), 1)
 
-    @patch("hotkey_manager.load_profile")
+    @patch("backend.input.hotkey_manager.load_profile")
     def test_on_auto_stop_noop_when_not_recording(self, load_profile):
         load_profile.return_value = _hotkey_config()
         completed = []
@@ -186,7 +186,7 @@ class HotkeyAutoStopTests(unittest.TestCase):
         manager._on_auto_stop("trailing_silence")
         self.assertEqual(len(completed), 0)
 
-    @patch("hotkey_manager.load_profile")
+    @patch("backend.input.hotkey_manager.load_profile")
     def test_real_recorder_gets_callback_registered(self, load_profile):
         load_profile.return_value = _hotkey_config()
         rec = recorder_mod.AudioRecorder()

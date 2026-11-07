@@ -16,6 +16,7 @@
 // Run with: node --test app/tests/utilitiesInputWake.test.mjs
 import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 import {
   UTILITIES_ELEMENT_IDS,
@@ -52,6 +53,14 @@ const WAKE_IDS = {
   modelsMessage: 'sdUtilModelsMessage',
 };
 
+const LIVE_WAKE_IDS = {
+  wakeTrainGroup: 'sdUtilWakeTrainGroup',
+  wakeTestButton: 'sdUtilWakeTestButton',
+  wakeTestResult: 'sdUtilWakeTestResult',
+  wakeScoreBar: 'sdUtilWakeScoreBar',
+  wakeScoreFill: 'sdUtilWakeScoreFill',
+};
+
 test('the Speech Input ids this file drives are the ids the Utilities module ships', () => {
   for (const [key, id] of Object.entries({ ...INPUT_IDS, ...WAKE_IDS })) {
     assert.equal(UTILITIES_ELEMENT_IDS[key], id, `${key} is not ${id} any more`);
@@ -64,7 +73,7 @@ const CAPABILITIES = {
 };
 
 function mount({ routes = {}, uploadWakeModel, confirmFn } = {}) {
-  const doc = makeDocument([...Object.values(INPUT_IDS), ...Object.values(WAKE_IDS)], {
+  const doc = makeDocument([...Object.values(INPUT_IDS), ...Object.values(WAKE_IDS), ...Object.values(LIVE_WAKE_IDS)], {
     sdUtilAudioDeviceSelect: { tagName: 'select' },
     sdUtilWakeEnabledToggle: { tagName: 'input', type: 'checkbox' },
     sdUtilWakeModelSelect: { tagName: 'select' },
@@ -72,7 +81,11 @@ function mount({ routes = {}, uploadWakeModel, confirmFn } = {}) {
     sdUtilWakeTrainPhrase: { tagName: 'input', type: 'text' },
     sdUtilWakeTrainButton: { tagName: 'button' },
   });
-  const bridge = makeBackendBridge({ 'GET /capabilities': CAPABILITIES, ...routes });
+  const bridge = makeBackendBridge({
+    'GET /capabilities': CAPABILITIES,
+    'POST /wake/phrase/preflight': { verdict: 'good', reasons: [] },
+    ...routes,
+  });
   const toasts = [];
   const betterFingers = { backendRequest: bridge.request, uploadWakeModel };
   const restore = installDomGlobals({ document: doc, betterFingers });
@@ -82,6 +95,30 @@ function mount({ routes = {}, uploadWakeModel, confirmFn } = {}) {
   });
   return { doc, feature, bridge, toasts, restore, el: (id) => doc.getElementById(id) };
 }
+
+test('#sdUtilWakeTrainGroup and #sdUtilWakeScoreBar are present in the actual Signal Desk markup', () => {
+  const html = readFileSync(new URL('../src/renderer/signal-desk.html', import.meta.url), 'utf8');
+  for (const id of ['sdUtilWakeTrainGroup', 'sdUtilWakeScoreBar']) {
+    assert.ok(html.includes(`id="${id}"`), `signal-desk.html is missing #${id}`);
+  }
+});
+
+test('#sdUtilWakeTestButton posts /wake/test, reports samples, and fills #sdUtilWakeScoreFill', async (t) => {
+  const ctx = mount({ routes: { 'POST /wake/test': { peak_score: 0.73, sample_count: 14 } } });
+  t.after(ctx.restore);
+  ctx.feature.init();
+
+  const button = ctx.el('sdUtilWakeTestButton');
+  button.click();
+  assert.equal(button.disabled, true, 'the live test button must lock while the request is pending');
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const request = ctx.bridge.find('POST', '/wake/test');
+  assert.deepEqual(request.body, { duration_s: 10 }, 'the live test must use the shipping ten-second request');
+  assert.equal(ctx.el('sdUtilWakeScoreFill').style.width, '73%');
+  assert.equal(ctx.el('sdUtilWakeTestResult').textContent, 'Peak score: 73% over 14 samples.');
+  assert.equal(button.disabled, false, 'the live test button must unlock after the request');
+});
 
 // --- UI-07-026: the platform/session readout ---------------------------------
 
@@ -245,6 +282,16 @@ test('#sdUtilWakeTrainProgress fills from the poll and #sdUtilWakeTrainResult st
   await new Promise((resolve) => setImmediate(resolve));
 
   const progress = ctx.el('sdUtilWakeTrainProgress');
+  assert.deepEqual(
+    ctx.bridge.signatures().slice(0, 2),
+    ['POST /wake/phrase/preflight', 'POST /wake/train'],
+    'the phrase preflight must complete before training starts',
+  );
+  assert.deepEqual(ctx.bridge.find('POST', '/wake/phrase/preflight').body, {
+    phrase: 'hey desk',
+    command_vocabulary: [],
+    common_vocabulary: [],
+  });
   assert.equal(progress.hidden, false, 'the progress bar must appear as soon as training starts');
   assert.equal(ctx.el('sdUtilWakeTrainButton').disabled, true, 'the button must not accept a second run mid-train');
 
@@ -299,6 +346,64 @@ test('training refuses to start with an empty phrase, and nothing reaches the ba
 
   assert.deepEqual(ctx.bridge.signatures(), []);
   assert.deepEqual(ctx.toasts, [{ message: 'Enter a phrase to train first.', tone: 'warning' }]);
+});
+
+test('a rejected phrase never reaches training and shows bounded reasons', async (t) => {
+  const ctx = mount({
+    routes: {
+      'POST /wake/phrase/preflight': {
+        verdict: 'reject',
+        reasons: [
+          'The phrase is too short.',
+          'It closely resembles a common command.',
+          'Use at least two syllables.',
+          'This fourth reason must not be shown.',
+        ],
+      },
+      'POST /wake/train': { started: true },
+    },
+  });
+  t.after(ctx.restore);
+  ctx.feature.init();
+
+  ctx.el('sdUtilWakeTrainPhrase').value = 'go';
+  ctx.el('sdUtilWakeTrainButton').click();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(ctx.bridge.signatures(), ['POST /wake/phrase/preflight']);
+  assert.equal(ctx.el('sdUtilWakeTrainProgress').hidden, true);
+  assert.equal(ctx.el('sdUtilWakeTrainButton').disabled, false);
+  assert.equal(ctx.el('sdUtilWakeTrainResult').dataset.tone, 'danger');
+  assert.match(ctx.el('sdUtilWakeTrainResult').textContent, /Phrase rejected: The phrase is too short\./);
+  assert.doesNotMatch(ctx.el('sdUtilWakeTrainResult').textContent, /fourth reason/i);
+});
+
+test('a failed phrase preflight fails closed and visibly explains that training did not start', async (t) => {
+  const ctx = mount({
+    routes: {
+      'POST /wake/phrase/preflight': {
+        ok: false,
+        status: 503,
+        body: { detail: 'local phrase evaluator unavailable' },
+      },
+      'POST /wake/train': { started: true },
+    },
+  });
+  t.after(ctx.restore);
+  ctx.feature.init();
+
+  ctx.el('sdUtilWakeTrainPhrase').value = 'hey betterfingers';
+  ctx.el('sdUtilWakeTrainButton').click();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(ctx.bridge.signatures(), ['POST /wake/phrase/preflight']);
+  assert.equal(ctx.el('sdUtilWakeTrainProgress').hidden, true);
+  assert.equal(ctx.el('sdUtilWakeTrainButton').disabled, false);
+  assert.equal(ctx.el('sdUtilWakeTrainResult').dataset.tone, 'danger');
+  assert.equal(
+    ctx.el('sdUtilWakeTrainResult').textContent,
+    'Phrase check failed: local phrase evaluator unavailable. Training did not start.',
+  );
 });
 
 // --- UI-08-018: the wake engine badge and backbone list ----------------------

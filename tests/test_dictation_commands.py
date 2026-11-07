@@ -1,6 +1,6 @@
 import unittest
 
-from dictation_commands import apply_commands
+from backend.commands.dictation_commands import apply_commands
 
 
 class DictationCommandTests(unittest.TestCase):

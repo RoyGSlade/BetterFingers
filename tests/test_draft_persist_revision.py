@@ -19,7 +19,7 @@ import time
 import unittest
 from unittest.mock import patch
 
-import history_store
+from backend.stores import history_store
 import server
 
 
@@ -27,7 +27,7 @@ class PersistTestMixin(unittest.TestCase):
     def setUp(self):
         super().setUp()
         self._tmp = tempfile.TemporaryDirectory()
-        for target in ("history_store.get_user_data_path", "server.get_user_data_path"):
+        for target in ("backend.stores.history_store.get_user_data_path", "server.get_user_data_path"):
             p = patch(target, return_value=self._tmp.name)
             p.start()
             self.addCleanup(p.stop)

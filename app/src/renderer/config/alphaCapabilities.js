@@ -10,6 +10,8 @@ export const ALPHA_CAPABILITIES = Object.freeze({
   workflowSettings: false,
   personaStressTest: false,
   deprecatedPersonaActions: false,
+  // Round 5, item 2: renaming a persona is off for Phase 0 (it moved examples unseen).
+  personaRename: false,
   structuredPersonaEditor: true,
   customVoiceWorkflow: true,
   scribeLongInputBatching: true,
@@ -23,6 +25,7 @@ export const ALPHA_CAPABILITY_SELECTORS = Object.freeze({
   workflowSettings: ['#sdUtilWorkflowGroup'],
   personaStressTest: ['#sdStressTestButton', '#sdStressTestResults'],
   deprecatedPersonaActions: ['#sdDeprecatedPersonaActions'],
+  personaRename: ['#sdPersonaRenameButton'],
 });
 
 export function applyAlphaCapabilities(root, capabilities = ALPHA_CAPABILITIES) {

@@ -1,6 +1,6 @@
 import unittest
 
-from text_formatter import TextFormatter, format_text
+from backend.stt.text_formatter import TextFormatter, format_text
 
 
 class _Seg:

@@ -12,8 +12,8 @@ import unittest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-import audio_schema  # noqa: E402
-import audio_status  # noqa: E402
+from backend.audio import audio_schema  # noqa: E402
+from backend.audio import audio_status  # noqa: E402
 from backend.platform.audio_privacy import base, journal as journal_mod  # noqa: E402
 from backend.platform.audio_privacy import lease as lease_mod  # noqa: E402
 

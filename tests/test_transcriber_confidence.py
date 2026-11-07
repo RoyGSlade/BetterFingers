@@ -10,8 +10,8 @@ from unittest.mock import patch
 import numpy as np
 
 import server
-import utils
-from transcriber import Transcriber
+from backend.config import utils
+from backend.stt.transcriber import Transcriber
 
 
 class _Segment:

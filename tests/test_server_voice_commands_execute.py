@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, patch
 from fastapi.testclient import TestClient
 
 import server
+from backend.api.routes import drafts as routes_drafts
 
 OVERLAY_CTX = {"review_overlay_open": True}
 
@@ -54,31 +55,29 @@ class ExecuteVoiceCommandTests(unittest.TestCase):
         self.assertTrue(response.json()["ok"])
         self.assertEqual(statuses[0], ("command_detected", {"action": "emergency_stop", "kind": "app_action", "confidence": 1.0}))
 
-    def test_send_requires_confirmation_before_executing(self):
+    def test_a_spoken_send_never_places_the_draft(self):
+        """Phase 0 item 3. Voice may ask BetterFingers to PRESENT the draft; the
+        send itself takes a signed tap from the Electron main process. Neither a
+        recognised phrase nor ``confirm: true`` places text into another app."""
         draft = server.create_draft("raw", "final")
         statuses = []
-        with patch.object(server, "send_draft_by_id") as send_mock, patch.object(
-            server, "broadcast_status_threadsafe", side_effect=lambda status, data=None: statuses.append((status, data or {})),
-        ):
-            with TestClient(server.app) as client:
-                response = self._post(client, text="send it", context=OVERLAY_CTX, draft_id=draft["id"])
-        send_mock.assert_not_called()
-        data = response.json()
-        self.assertFalse(data["ok"])
-        self.assertEqual(data["reason"], "needs_confirmation")
-        self.assertIn("command_needs_confirmation", [s for s, _ in statuses])
-
-    def test_send_executes_when_confirmed(self):
-        draft = server.create_draft("raw", "final")
-        with patch.object(server, "send_draft_by_id", return_value={"ok": True}) as send_mock, patch.object(
-            server, "broadcast_status_threadsafe",
-        ):
-            with TestClient(server.app) as client:
-                response = self._post(
-                    client, text="send it", context=OVERLAY_CTX, draft_id=draft["id"], confirm=True,
-                )
-        send_mock.assert_called_once_with(draft["id"])
-        self.assertTrue(response.json()["ok"])
+        for extra in ({}, {"confirm": True}):
+            with patch.object(server, "send_draft_by_id") as send_mock, patch.object(
+                server, "perform_output_action"
+            ) as output_mock, patch.object(
+                server, "broadcast_status_threadsafe",
+                side_effect=lambda status, data=None: statuses.append((status, data or {})),
+            ):
+                with TestClient(server.app) as client:
+                    response = self._post(client, text="send it", context=OVERLAY_CTX, draft_id=draft["id"], **extra)
+            send_mock.assert_not_called()
+            output_mock.assert_not_called()
+            data = response.json()
+            self.assertFalse(data["ok"])
+            self.assertEqual(data["reason"], "needs_tap")
+            self.assertEqual(data["draft_id"], draft["id"])
+        self.assertIn("command_needs_tap", [s for s, _ in statuses])
+        self.assertEqual(server.get_draft_by_id(draft["id"])["status"], "pending")
 
     def test_cancel_declines_the_draft(self):
         draft = server.create_draft("raw", "final")
@@ -110,7 +109,7 @@ class ExecuteVoiceCommandTests(unittest.TestCase):
 
     def test_rewrite_shorter_maps_to_rewrite_draft_with_shorter_action(self):
         draft = server.create_draft("raw", "final")
-        with patch.object(server, "rewrite_draft", new_callable=AsyncMock, return_value={"ok": True}) as rewrite_mock, patch.object(
+        with patch.object(routes_drafts, "rewrite_draft", new_callable=AsyncMock, return_value={"ok": True}) as rewrite_mock, patch.object(
             server, "broadcast_status_threadsafe",
         ):
             with TestClient(server.app) as client:
@@ -121,7 +120,7 @@ class ExecuteVoiceCommandTests(unittest.TestCase):
 
     def test_retry_calls_retry_draft(self):
         draft = server.create_draft("raw", "final")
-        with patch.object(server, "retry_draft", new_callable=AsyncMock, return_value={"ok": True}) as retry_mock, patch.object(
+        with patch.object(routes_drafts, "retry_draft", new_callable=AsyncMock, return_value={"ok": True}) as retry_mock, patch.object(
             server, "broadcast_status_threadsafe",
         ):
             with TestClient(server.app) as client:

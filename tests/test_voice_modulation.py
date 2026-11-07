@@ -2,7 +2,7 @@ import unittest
 
 import numpy as np
 
-from voice_modulation import (
+from backend.tts.voice_modulation import (
     apply_energy_gain,
     apply_modulation,
     apply_warmth_brightness,

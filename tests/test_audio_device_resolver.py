@@ -3,8 +3,8 @@
 import unittest
 from unittest.mock import patch
 
-import audio_device_resolver
-from audio_device_resolver import build_input_device_fingerprint, resolve_input_device
+from backend.audio import audio_device_resolver
+from backend.audio.audio_device_resolver import build_input_device_fingerprint, resolve_input_device
 
 
 def _dev(index, name, host_api="ALSA", inputs=2, samplerate=48000.0):

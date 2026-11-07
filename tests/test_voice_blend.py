@@ -2,7 +2,7 @@ import unittest
 
 import numpy as np
 
-from voice_blend import blend_many, blend_voices, clamp_weight, validate_blend_request
+from backend.tts.voice_blend import blend_many, blend_voices, clamp_weight, validate_blend_request
 
 
 class ClampWeightTests(unittest.TestCase):

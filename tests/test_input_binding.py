@@ -1,6 +1,6 @@
 import unittest
 
-from input_binding import InputBinding, parse_binding_expression
+from backend.input.input_binding import InputBinding, parse_binding_expression
 
 
 class InputBindingTests(unittest.TestCase):

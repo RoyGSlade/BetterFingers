@@ -93,6 +93,15 @@ class SendActionTests(unittest.TestCase):
         for action in ("type_text", "type", "paste", "auto_send"):
             self.assertEqual(gp.resolve_send_action(action), "copy_only", action)
 
+    def test_chat_opening_and_unknown_actions_also_become_the_clipboard(self):
+        # open_chat_then_send presses the game's chat key and then pastes: two
+        # synthetic inputs into the focused game. server.py accepts it and
+        # derives it from send_mode == "auto_send", so a denylist that only
+        # named typing actions let it through. Anything not known to be
+        # non-synthetic must fall back to the clipboard.
+        for action in ("open_chat_then_send", "send", "submit", "some_future_action"):
+            self.assertEqual(gp.resolve_send_action(action), "copy_only", action)
+
     def test_non_typing_actions_are_left_alone(self):
         self.assertEqual(gp.resolve_send_action("copy_only"), "copy_only")
         self.assertEqual(gp.resolve_send_action("review"), "review")

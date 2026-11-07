@@ -1,6 +1,6 @@
 import unittest
 
-from wer import compare_transcripts, normalize, tokenize, word_error_rate
+from tools.lib.wer import compare_transcripts, normalize, tokenize, word_error_rate
 
 
 class NormalizeTokenizeTests(unittest.TestCase):

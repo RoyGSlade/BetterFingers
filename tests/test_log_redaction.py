@@ -9,7 +9,7 @@ import re
 import unittest
 from unittest.mock import patch
 
-import log_redaction as lr
+from backend.privacy import log_redaction as lr
 
 
 class RedactUserTextTests(unittest.TestCase):
@@ -133,8 +133,10 @@ _SKIP_DIR_NAMES = {".venv", "node_modules", "tests", ".git", "app", "__pycache__
 # 1014 and broke a line-number-keyed allowlist for a site that hadn't
 # actually changed). Add here with a one-line reason if a future audit
 # clears a new match rather than wrapping it — never to silence a real one.
+# Keys are repo-relative paths with forward slashes (the lookup below
+# normalizes os.sep, so the same key matches on Windows and Linux CI).
 _ALLOWLIST = {
-    "clipboard_capture.py": {
+    "backend/output/clipboard_capture.py": {
         # pyperclip/Win32 clipboard API exceptions: the message is a
         # library/OS failure (access denied, format unavailable, buffer too
         # large) — these APIs never embed the clipboard's own text content.
@@ -151,7 +153,7 @@ _ALLOWLIST = {
         # No interpolation at all — a static message string.
         'logging.exception("Clipboard copy failed")',
     },
-    "injector.py": {
+    "backend/output/injector.py": {
         # get_clipboard_text() ACCESS failure, not the text it would have returned.
         'logging.debug(f"Could not snapshot clipboard before paste: {exc}")',
     },
@@ -204,7 +206,7 @@ class LoggingLeakGateTests(unittest.TestCase):
                 if any(wrapper in line for wrapper in _REDACT_WRAPPERS):
                     continue
                 stripped = line.strip()
-                if stripped in _ALLOWLIST.get(relpath, ()):
+                if stripped in _ALLOWLIST.get(relpath.replace(os.sep, "/"), ()):
                     continue
                 offenders.append(f"{relpath}:{lineno}: {stripped}")
         self.assertEqual(

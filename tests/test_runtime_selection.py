@@ -8,7 +8,7 @@ hash-pinned.
 import unittest
 from unittest.mock import patch
 
-import model_manager as mm
+from backend.models import model_manager as mm
 
 
 class SelectRuntimeSpecTests(unittest.TestCase):

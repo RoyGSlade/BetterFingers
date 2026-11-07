@@ -18,9 +18,9 @@ import numpy as np
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-import recorder as recorder_mod  # noqa: E402
-import wake_pretrigger  # noqa: E402
-import wake_word  # noqa: E402
+from backend.audio import recorder as recorder_mod  # noqa: E402
+from backend.wake import wake_pretrigger  # noqa: E402
+from backend.wake import wake_word  # noqa: E402
 
 
 class FakeSubscription:
@@ -272,7 +272,7 @@ class RoutesWakeHandoffTests(unittest.TestCase):
     disable — the four calls D-0025 listed as not landed."""
 
     def setUp(self):
-        import routes_wake
+        from backend.api.routes import wake as routes_wake
 
         self.routes_wake = routes_wake
         routes_wake._handoff = None
@@ -355,7 +355,7 @@ class HotkeyManagerThreadingTests(unittest.TestCase):
     """The reason and the pre-roll have to survive the trip to the recorder."""
 
     def _manager(self):
-        import hotkey_manager
+        from backend.input import hotkey_manager
 
         manager = hotkey_manager.HotkeyManager.__new__(hotkey_manager.HotkeyManager)
         manager.recorder = mock.Mock()

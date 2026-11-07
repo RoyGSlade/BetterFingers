@@ -5,9 +5,9 @@ import time
 import numpy as np
 from unittest.mock import Mock, patch
 
-from job_manager import JOBS, JobState
-from model_runtime_coordinator import ModelRuntimeCoordinator, RuntimeBusyError
-from tts_engine import ReviewTTSEngine
+from backend.runtime.job_manager import JOBS, JobState
+from backend.runtime.model_runtime_coordinator import ModelRuntimeCoordinator, RuntimeBusyError
+from backend.tts.tts_engine import ReviewTTSEngine
 
 
 class TTSEngineAdmissionTests(unittest.TestCase):
@@ -93,7 +93,7 @@ class TTSEngineTests(unittest.TestCase):
             engine,
             "_load_kokoro_onnx_backend",
             return_value=(True, "onnx ready"),
-        ) as onnx_mock, patch("tts_engine.importlib.import_module") as import_mock:
+        ) as onnx_mock, patch("backend.tts.tts_engine.importlib.import_module") as import_mock:
             ok, message = engine._load_kokoro_backend(voice_hint="english", prefer_gpu=False)
 
         self.assertTrue(ok)
@@ -101,7 +101,7 @@ class TTSEngineTests(unittest.TestCase):
         onnx_mock.assert_called_once_with(voice_hint="english", prefer_gpu=False, quantization="fp32")
         import_mock.assert_not_called()
 
-    @patch("tts_engine.importlib.import_module")
+    @patch("backend.tts.tts_engine.importlib.import_module")
     def test_resolve_onnx_providers_prefers_cuda_when_available(self, import_module):
         fake_ort = Mock()
         fake_ort.get_available_providers.return_value = [
@@ -546,31 +546,31 @@ class GenerateKokoroAudioModulationTests(unittest.TestCase):
 
 class CacheSignatureTests(unittest.TestCase):
     def test_blend_signature_deterministic_and_order_independent(self):
-        from tts_engine import _blend_signature
+        from backend.tts.tts_engine import _blend_signature
 
         a = _blend_signature({"x": 0.3, "y": 0.7})
         b = _blend_signature({"y": 0.7, "x": 0.3})
         self.assertEqual(a, b)
 
     def test_blend_signature_empty(self):
-        from tts_engine import _blend_signature
+        from backend.tts.tts_engine import _blend_signature
 
         self.assertEqual(_blend_signature(None), ())
         self.assertEqual(_blend_signature({}), ())
 
     def test_blend_signature_differs_by_weight(self):
-        from tts_engine import _blend_signature
+        from backend.tts.tts_engine import _blend_signature
 
         self.assertNotEqual(_blend_signature({"x": 0.3}), _blend_signature({"x": 0.4}))
 
     def test_modulation_signature_empty(self):
-        from tts_engine import _modulation_signature
+        from backend.tts.tts_engine import _modulation_signature
 
         self.assertEqual(_modulation_signature(None), ())
         self.assertEqual(_modulation_signature({}), ())
 
     def test_modulation_signature_differs_by_value(self):
-        from tts_engine import _modulation_signature
+        from backend.tts.tts_engine import _modulation_signature
 
         self.assertNotEqual(
             _modulation_signature({"pitch": 1.0}),
@@ -578,7 +578,7 @@ class CacheSignatureTests(unittest.TestCase):
         )
 
     def test_modulation_signature_includes_pause_style(self):
-        from tts_engine import _modulation_signature
+        from backend.tts.tts_engine import _modulation_signature
 
         self.assertNotEqual(
             _modulation_signature({"pause_style": "dramatic"}),

@@ -7,7 +7,7 @@ model is unavailable.
 """
 
 from backend.services.message_rescue import check_preservation
-from live_model_harness import (
+from tools.lib.live_model_harness import (
     DEFAULT_CONTEXT_TEXT,
     PRESERVATION_TRANSCRIPT,
     discover_readiness,

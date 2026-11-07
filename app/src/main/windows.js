@@ -2,6 +2,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const { BrowserWindow, app, shell } = require('electron');
 const { isTrustedRendererUrl } = require('./senderValidation');
+const onboardingStore = require('./onboardingStore');
 
 let mainWindow = null;
 const MANUAL_UPDATE_URL = 'https://github.com/RoyGSlade/BetterFingers/releases';
@@ -43,6 +44,11 @@ const OVERLAY_PLACEMENTS = new Set([
   'bottom-left', 'bottom', 'bottom-right',
 ]);
 const OVERLAY_LABEL_POSITIONS = new Set(['hidden', 'beside', 'above', 'below', 'center']);
+// What the overlay draws: the Signal Core ring, or the Signal Engineer face
+// (lib/signalEngineerFace.mjs). The face is wider than tall, so the window
+// keeps the size setting as its height and widens by FACE_ASPECT.
+const OVERLAY_FACES = new Set(['ring', 'signal-engineer', 'sweetheart', 'rustbucket']);
+const FACE_ASPECT = 566 / 356; // widest shell viewBox (standard.parts.json); rustbucket is 576/372
 const DEFAULT_OVERLAY_APPEARANCE = {
   size: 'medium',
   placement: 'bottom-right',
@@ -50,6 +56,7 @@ const DEFAULT_OVERLAY_APPEARANCE = {
   vibrancy: 1,
   labelPos: 'hidden',
   alwaysOn: false,
+  face: 'ring',
 };
 let overlayAppearance = { ...DEFAULT_OVERLAY_APPEARANCE };
 
@@ -81,6 +88,7 @@ function normalizeOverlayAppearance(partial) {
     vibrancy: Math.max(0.3, Math.min(2, Number(base.vibrancy) || 1)),
     labelPos: OVERLAY_LABEL_POSITIONS.has(labelPos) ? labelPos : 'hidden',
     alwaysOn: Boolean(base.alwaysOn),
+    face: OVERLAY_FACES.has(base.face) ? base.face : 'ring',
   };
 }
 
@@ -90,10 +98,11 @@ function overlayWindowSize(appearance) {
   const ring = OVERLAY_SIZE_PX[appearance.size] || OVERLAY_SIZE_PX.medium;
   const pad = 20;
   const box = ring + pad;
+  const boxW = appearance.face && appearance.face !== 'ring' ? Math.round(ring * FACE_ASPECT) + pad : box;
   const pos = appearance.labelPos;
-  if (pos === 'beside') return { width: box + 176, height: box };
-  if (pos === 'above' || pos === 'below') return { width: Math.max(box, 190), height: box + 26 };
-  return { width: box, height: box }; // hidden or center
+  if (pos === 'beside') return { width: boxW + 176, height: box };
+  if (pos === 'above' || pos === 'below') return { width: Math.max(boxW, 190), height: box + 26 };
+  return { width: boxW, height: box }; // hidden or center
 }
 
 // Screen position for a placement anchor, given the window size.
@@ -124,9 +133,9 @@ function applyOverlayAppearance() {
   const [x, y] = overlayAnchorPosition(a.placement, width, height);
   overlayWindow.setPosition(x, y);
   try { overlayWindow.setOpacity(a.opacity); } catch (error) { /* WM may not support it */ }
-  // Forward the renderer-side bits (ring size / vibrancy / label position) to the overlay.
+  // Forward the renderer-side bits (ring size / vibrancy / label position / face) to the overlay.
   overlayWindow.webContents.send('overlay:appearance', {
-    size: a.size, vibrancy: a.vibrancy, labelPos: a.labelPos,
+    size: a.size, vibrancy: a.vibrancy, labelPos: a.labelPos, face: a.face,
   });
   // Pinned always-on: keep it up showing the idle ring. (When it's off, the
   // status flow in ipc.js hides it once nothing is happening.)
@@ -161,8 +170,19 @@ function isPositionOnScreen(x, y) {
   });
 }
 
-function resolvePreloadPath() {
-  return path.join(__dirname, '../preload/preload.js');
+// One preload per window kind (Phase 0 item 7). Only the dashboard gets the full
+// bridge; the overlay, review window and splash get a minimal one each.
+const PRELOADS = Object.freeze({
+  dashboard: 'preload.js',
+  overlay: 'preload-overlay.js',
+  review: 'preload-review.js',
+  splash: 'preload-splash.js',
+});
+
+function resolvePreloadPath(kind = 'dashboard') {
+  const file = PRELOADS[kind];
+  if (!file) throw new Error(`Unknown window kind for preload: ${kind}`);
+  return path.join(__dirname, '../preload', file);
 }
 
 // The packaged renderer pages sit beside the compiled main scripts
@@ -180,7 +200,9 @@ function hardenWindowNavigation(window) {
   const devOrigin = process.env.ELECTRON_RENDERER_URL;
   const rendererRoot = rendererDir();
   window.webContents.setWindowOpenHandler(({ url }) => {
-    if (url === MANUAL_UPDATE_URL) shell.openExternal(MANUAL_UPDATE_URL).catch(() => {});
+    if (url === MANUAL_UPDATE_URL && !onboardingStore.needsConsent(onboardingStore.readState())) {
+      shell.openExternal(MANUAL_UPDATE_URL).catch(() => {});
+    }
     return { action: 'deny' };
   });
   window.webContents.on('will-navigate', (event, url) => {
@@ -268,7 +290,7 @@ function createMainWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
-      preload: resolvePreloadPath(),
+      preload: resolvePreloadPath('dashboard'),
     },
   });
 
@@ -326,7 +348,7 @@ function createSplashWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
-      preload: resolvePreloadPath(),
+      preload: resolvePreloadPath('splash'),
     },
   });
 
@@ -372,6 +394,9 @@ function focusMainWindow(window = mainWindow) {
 
 let overlayWindow = null;
 let reviewWindow = null;
+let reviewPresentation = 0;
+let expectedReviewDraftId = null;
+let displayedReviewDraft = null;
 
 function createOverlayWindow() {
   loadOverlayAppearance();
@@ -390,7 +415,7 @@ function createOverlayWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
-      preload: resolvePreloadPath(),
+      preload: resolvePreloadPath('overlay'),
     },
   });
 
@@ -469,7 +494,7 @@ function createReviewWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
-      preload: resolvePreloadPath(),
+      preload: resolvePreloadPath('review'),
     },
   });
 
@@ -481,8 +506,13 @@ function createReviewWindow() {
   hardenWindowNavigation(reviewWindow);
 
   reviewWindow.on('closed', () => {
+    displayedReviewDraft = null;
+    expectedReviewDraftId = null;
     reviewWindow = null;
   });
+  reviewWindow.on('hide', () => { displayedReviewDraft = null; });
+  reviewWindow.webContents.on('did-start-loading', () => { displayedReviewDraft = null; });
+  reviewWindow.webContents.on('render-process-gone', () => { displayedReviewDraft = null; });
 
   loadReviewOverlay(reviewWindow).catch((error) => {
     console.error('Failed to load Electron review overlay:', error);
@@ -493,9 +523,12 @@ function createReviewWindow() {
 
 function showReviewWindow(draft) {
   const window = createReviewWindow();
+  const presentation = ++reviewPresentation;
+  expectedReviewDraftId = draft?.id ?? null;
+  displayedReviewDraft = null;
   const sendDraft = () => {
-    if (!window.isDestroyed()) {
-      window.webContents.send('review:draft', draft ?? null);
+    if (!window.isDestroyed() && presentation === reviewPresentation) {
+      window.webContents.send('review:draft', draft ? { ...draft, reviewPresentation: presentation } : null);
     }
   };
 
@@ -510,6 +543,7 @@ function showReviewWindow(draft) {
 }
 
 function hideReviewWindow() {
+  displayedReviewDraft = null;
   if (reviewWindow && !reviewWindow.isDestroyed() && reviewWindow.isVisible()) {
     reviewWindow.hide();
   }
@@ -519,7 +553,29 @@ function getReviewWindow() {
   return reviewWindow;
 }
 
+function acknowledgeReviewDraft(sender, payload) {
+  if (!reviewWindow || reviewWindow.isDestroyed() || sender !== reviewWindow.webContents) return false;
+  // A stale/invalid renderer update is uncertainty, not permission to keep
+  // using an earlier acknowledgment (for example after an async edit race).
+  displayedReviewDraft = null;
+  if (payload?.presentation !== reviewPresentation || payload?.id !== expectedReviewDraftId
+      || !Number.isSafeInteger(payload?.id) || payload.id <= 0 || typeof payload?.finalText !== 'string') return false;
+  displayedReviewDraft = { displayed_draft_id: payload.id, displayed_final_text: payload.finalText };
+  return true;
+}
+
+function getDisplayedReviewDraft() {
+  if (!reviewWindow || reviewWindow.isDestroyed() || !reviewWindow.isVisible()) return null;
+  return displayedReviewDraft ? { ...displayedReviewDraft } : null;
+}
+
+function isReviewWindowVisible() {
+  return Boolean(reviewWindow && !reviewWindow.isDestroyed() && reviewWindow.isVisible());
+}
+
 module.exports = {
+  resolvePreloadPath,
+  PRELOADS,
   createMainWindow,
   getMainWindow,
   focusMainWindow,
@@ -534,4 +590,7 @@ module.exports = {
   showReviewWindow,
   hideReviewWindow,
   getReviewWindow,
+  acknowledgeReviewDraft,
+  getDisplayedReviewDraft,
+  isReviewWindowVisible,
 };

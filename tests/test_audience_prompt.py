@@ -24,7 +24,7 @@ from backend.services.contacts import audience_block
 
 
 def _process_fast_lane_source():
-    import llm_engine
+    from backend.llm import llm_engine
 
     return inspect.getsource(llm_engine.LLMEngine.process_fast_lane)
 
@@ -67,7 +67,7 @@ class TestAudienceBlock:
 
 class TestPromptContract:
     def test_process_fast_lane_accepts_the_kwarg(self):
-        import llm_engine
+        from backend.llm import llm_engine
 
         sig = inspect.signature(llm_engine.LLMEngine.process_fast_lane)
         assert "audience_summary" in sig.parameters
@@ -118,7 +118,7 @@ class TestPromptContract:
 
 class TestDefaultOff:
     def test_profile_default_is_off(self):
-        from utils import _profile_defaults
+        from backend.config.utils import _profile_defaults
 
         assert _profile_defaults()["use_audience_context"] is False, (
             "audience context must stay opt-in until the preservation "
@@ -126,7 +126,7 @@ class TestDefaultOff:
         )
 
     def test_setting_survives_a_round_trip_and_coerces(self):
-        from utils import _profile_defaults, _sanitize_profile_values
+        from backend.config.utils import _profile_defaults, _sanitize_profile_values
 
         defaults = _profile_defaults()
         assert _sanitize_profile_values({"use_audience_context": "true"}, defaults)["use_audience_context"] is True
@@ -154,12 +154,12 @@ class TestStickySelection:
         decides, not how often they are interrupted, and re-confirming a
         standing choice before every utterance is friction with no safety
         benefit (ACCOMPLISH.md §3, design doc §10)."""
-        from utils import _profile_defaults
+        from backend.config.utils import _profile_defaults
 
         assert _profile_defaults()["active_contact_id"] is None
 
     def test_no_selection_normalizes_to_none_not_empty_string(self):
-        from utils import _profile_defaults, _sanitize_profile_values
+        from backend.config.utils import _profile_defaults, _sanitize_profile_values
 
         defaults = _profile_defaults()
         for blank in ("", "   ", None):
@@ -167,7 +167,7 @@ class TestStickySelection:
             assert cfg["active_contact_id"] is None
 
     def test_a_selection_round_trips(self):
-        from utils import _profile_defaults, _sanitize_profile_values
+        from backend.config.utils import _profile_defaults, _sanitize_profile_values
 
         cfg = _sanitize_profile_values({"active_contact_id": " abc123 "}, _profile_defaults())
         assert cfg["active_contact_id"] == "abc123"

@@ -31,7 +31,7 @@ def selection_capture_supported() -> bool:
     ``clipboard_capture`` owns the live clipboard and copy-trigger capability
     checks; this adapter only exposes their structured ``supported`` result.
     """
-    import clipboard_capture
+    from backend.output import clipboard_capture
 
     return bool(clipboard_capture._selection_capture_support().get("supported"))
 
@@ -54,7 +54,7 @@ def capture_selection(
         return SelectionCaptureResult(outcome="unsupported")
 
     if capture_fn is None:
-        import clipboard_capture
+        from backend.output import clipboard_capture
 
         capture_fn = clipboard_capture.capture_selection_text_with_restore
 

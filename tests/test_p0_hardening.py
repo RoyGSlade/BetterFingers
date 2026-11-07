@@ -14,9 +14,9 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-import dictation_coordinator as dc
-import history_store
-import recordings
+from backend.runtime import dictation_coordinator as dc
+from backend.stores import history_store
+from backend.stores import recordings
 import server
 
 
@@ -27,7 +27,7 @@ class SqliteRecreationTests(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
-        p = patch("history_store.get_user_data_path", return_value=self._tmp.name)
+        p = patch("backend.stores.history_store.get_user_data_path", return_value=self._tmp.name)
         p.start()
         self.addCleanup(p.stop)
         # Reset module cache so each test rebuilds against the temp dir.
@@ -85,7 +85,7 @@ class RecordingRollbackTests(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
-        p = patch("recordings.get_user_data_path", return_value=self._tmp.name)
+        p = patch("backend.stores.recordings.get_user_data_path", return_value=self._tmp.name)
         p.start()
         self.addCleanup(p.stop)
 
@@ -105,7 +105,7 @@ class RecordingRollbackTests(unittest.TestCase):
                 raise OSError("disk full")
             return real_replace(src, dst)
 
-        with patch("recordings.os.replace", side_effect=flaky_replace):
+        with patch("backend.stores.recordings.os.replace", side_effect=flaky_replace):
             result = recordings.save_recording(_Rec(), rec_id=recordings.new_rec_id())
         self.assertIsNone(result)
         # No orphan WAV, no orphan meta, no leftover temp.
@@ -212,7 +212,7 @@ class WipeLifecycleTests(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
-        for target in ("recordings.get_user_data_path", "history_store.get_user_data_path",
+        for target in ("backend.stores.recordings.get_user_data_path", "backend.stores.history_store.get_user_data_path",
                        "server.get_user_data_path"):
             p = patch(target, return_value=self._tmp.name)
             p.start()
@@ -290,9 +290,15 @@ class LifespanAuthTests(unittest.TestCase):
             try:
                 result = server.enforce_startup_security()
                 self.assertTrue(result["generated"])
-                self.assertEqual(os.environ["BETTERFINGERS_AUTH_TOKEN"], result["token"])
+                # Round 2, item 3: a generated token is held in memory, NOT published in the
+                # environment (where /proc/<pid>/environ would expose it to same-user processes).
+                from backend.api import security
+                self.assertEqual(security.get_auth_token(), result["token"])
+                self.assertNotIn("BETTERFINGERS_AUTH_TOKEN", os.environ)
                 self.assertEqual(server.app.state.auth_token, result["token"])
             finally:
+                from backend.api import security
+                security.set_runtime_token(None)
                 os.environ.pop("BETTERFINGERS_AUTH_TOKEN", None)
 
     def test_auth_failures_get_rate_limited(self):

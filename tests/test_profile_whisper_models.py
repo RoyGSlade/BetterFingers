@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-import utils
+from backend.config import utils
 
 
 class ProfileWhisperModelTests(unittest.TestCase):
@@ -19,8 +19,8 @@ class ProfileWhisperModelTests(unittest.TestCase):
 
     def test_distil_whisper_selection_round_trips_through_profile_store(self):
         with tempfile.TemporaryDirectory(prefix="betterfingers-distil-profile-") as root:
-            with patch("utils.get_profiles_dir", return_value=root), patch(
-                "utils._app_state_path", return_value=os.path.join(root, "app_state.yaml")
+            with patch("backend.config.utils.get_profiles_dir", return_value=root), patch(
+                "backend.config.utils._app_state_path", return_value=os.path.join(root, "app_state.yaml")
             ):
                 utils.save_profile("Default", {"model_size": "distil-medium.en"})
                 loaded = utils.load_profile("Default")

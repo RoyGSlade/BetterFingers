@@ -10,7 +10,7 @@ import os
 import tempfile
 import unittest
 
-import store_migration as sm
+from backend.config import store_migration as sm
 
 
 def _default_factory():

@@ -5,9 +5,9 @@ from unittest.mock import patch
 
 import numpy as np
 
-import wake_models
-import wake_trainer
-import wake_training_service as wts
+from backend.wake import wake_models
+from backend.wake import wake_trainer
+from backend.wake import wake_training_service as wts
 
 
 class _StubScorer:
@@ -110,6 +110,25 @@ class TrainPhraseModelTests(unittest.TestCase):
             "hey fingers", make_scorer=_stub_scorer, synthesize_fn=lambda *a: None, voices=["v1"],
         )
         self.assertFalse(result["ok"])
+
+    def test_real_make_scorer_uses_wake_models_implementation(self):
+        mel = object()
+        embedding = object()
+        scorer = object()
+        with patch.object(
+            wake_models,
+            "build_onnx_session",
+            side_effect=[mel, embedding],
+        ) as build_session, patch.object(
+            wake_models,
+            "WakeScorer",
+            return_value=scorer,
+        ) as scorer_type:
+            result = wts.real_make_scorer()
+
+        self.assertIs(result, scorer)
+        self.assertEqual(build_session.call_count, 2)
+        scorer_type.assert_called_once_with(mel, embedding)
 
 
 class _FakeEngine:

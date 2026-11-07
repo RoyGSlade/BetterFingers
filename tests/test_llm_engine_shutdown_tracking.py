@@ -3,7 +3,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from llm_engine import LLMEngine
+from backend.llm.llm_engine import LLMEngine
 
 
 class LLMEngineShutdownTrackingTests(unittest.TestCase):
@@ -27,12 +27,19 @@ class LLMEngineShutdownTrackingTests(unittest.TestCase):
         return engine
 
     def test_setup_server_tracks_pid_when_reusing_existing_server(self):
+        # Phase 0 item 4: an existing server is reused only when the operator
+        # supplied its API key (a server nobody can authenticate to is replaced;
+        # see tests/test_llama_server_hardening.py).
         engine = self._new_engine()
         LLMEngine._ready = False
         LLMEngine._process_pid = None
+        saved_key = LLMEngine._api_key
+        self.addCleanup(setattr, LLMEngine, "_api_key", saved_key)
 
-        with patch("llm_engine.is_server_running", return_value=True), patch(
-            "llm_engine._find_server_pid_on_port", return_value=4242
+        with patch.dict("os.environ", {"BETTERFINGERS_LLAMA_API_KEY": "operator-key"}), patch(
+            "backend.llm.llm_engine.is_server_running", return_value=True
+        ), patch(
+            "backend.llm.llm_engine._find_server_pid_on_port", return_value=4242
         ), patch.object(engine, "_start_server") as start_mock:
             engine._setup_server()
 
@@ -48,10 +55,10 @@ class LLMEngineShutdownTrackingTests(unittest.TestCase):
         LLMEngine._process_pid = None
         LLMEngine._owns_process = True
 
-        with patch("llm_engine.is_server_running", return_value=True), patch(
-            "llm_engine._find_server_pid_on_port", return_value=4242
-        ), patch("llm_engine.os.kill") as kill_mock, patch(
-            "llm_engine.subprocess.run", return_value=SimpleNamespace(stdout="SUCCESS", stderr="")
+        with patch("backend.llm.llm_engine.is_server_running", return_value=True), patch(
+            "backend.llm.llm_engine._find_server_pid_on_port", return_value=4242
+        ), patch("backend.llm.llm_engine.os.kill") as kill_mock, patch(
+            "backend.llm.llm_engine.subprocess.run", return_value=SimpleNamespace(stdout="SUCCESS", stderr="")
         ):
             engine.shutdown()
 
@@ -67,7 +74,7 @@ class LLMEngineShutdownTrackingTests(unittest.TestCase):
         LLMEngine._process_pid = 4242
         LLMEngine._owns_process = False
 
-        with patch("llm_engine.os.kill") as kill_mock, patch("llm_engine.subprocess.run") as run_mock:
+        with patch("backend.llm.llm_engine.os.kill") as kill_mock, patch("backend.llm.llm_engine.subprocess.run") as run_mock:
             engine.shutdown()
 
         kill_mock.assert_not_called()

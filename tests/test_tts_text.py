@@ -1,6 +1,6 @@
 import unittest
 
-from tts_text import apply_pause_style, normalize_for_speech
+from backend.tts.tts_text import apply_pause_style, normalize_for_speech
 
 
 class TtsNormalizationTests(unittest.TestCase):
@@ -67,7 +67,7 @@ class TtsSplitterTests(unittest.TestCase):
     """The chunker already splits on sentence boundaries; guard that behavior."""
 
     def test_splits_on_sentence_boundaries_not_midword(self):
-        from tts_engine import ReviewTTSEngine
+        from backend.tts.tts_engine import ReviewTTSEngine
 
         long_text = ("This is the first sentence. " * 20).strip()
         chunks = ReviewTTSEngine._split_text_for_tts(text=long_text, max_chars=60)

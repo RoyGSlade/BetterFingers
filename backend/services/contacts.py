@@ -35,7 +35,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from store_migration import load_versioned_store, write_atomic
+from backend.config.store_migration import load_versioned_store, write_atomic, refresh_migration_backups
 
 # Schema history:
 #   v1 (current): {"schema_version": 1, "contacts": {id: {...}}}
@@ -216,7 +216,7 @@ class ContactStore:
     def path(self) -> str:
         if self._path is None:
             import os
-            from utils import get_user_data_path
+            from backend.config.utils import get_user_data_path
             self._path = os.path.join(get_user_data_path(), "contacts.json")
         return self._path
 
@@ -305,15 +305,17 @@ class ContactStore:
     def delete(self, contact_id) -> dict:
         cid = str(contact_id or "").strip()
         with self._lock:
-            data = self._load()
-            if cid not in data["contacts"]:
-                return {"ok": True, "deleted": False}
-            data["contacts"].pop(cid, None)
             try:
-                self._save(data)
+                refresh_migration_backups(self.path, None, SCHEMA_VERSION)
+                data = self._load()
+                existed = cid in data["contacts"]
+                data["contacts"].pop(cid, None)
+                refresh_migration_backups(self.path, json.dumps(data, indent=2, sort_keys=True, ensure_ascii=False), SCHEMA_VERSION)
+                if existed:
+                    self._save(data)
             except OSError as exc:
                 return {"ok": False, "error": "write_failed", "message": str(exc)}
-            return {"ok": True, "deleted": True}
+            return {"ok": True, "deleted": existed}
 
     def clear_all(self) -> dict:
         """Privacy clear. Contacts are user-authored personal data and go with

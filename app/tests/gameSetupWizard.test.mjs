@@ -38,17 +38,16 @@ function ready(extra = {}) {
     deviceKey: 'controller:pad',
     dictationBinding: DICTATION,
     commandBinding: COMMAND,
-    chatKey: 'Enter',
     delivery: DEFAULT_DELIVERY,
     ...extra,
   };
 }
 
-// --- the seven steps ---------------------------------------------------------
+// --- the supported setup steps ----------------------------------------------
 
-test('the wizard has exactly the seven steps the wave asks for, in order', () => {
+test('the wizard keeps the safety steps without collecting an unsupported chat key', () => {
   assert.deepEqual(STEPS, [
-    'detect', 'dictation', 'command', 'chat_key', 'delivery',
+    'detect', 'dictation', 'command', 'delivery',
     'warning', 'rehearsal', 'saved',
   ]);
 });
@@ -61,8 +60,10 @@ test('the step advances only when the previous one is genuinely done', () => {
   }).step, 'command');
   assert.equal(computeWizardState({
     deviceKey: 'controller:pad', dictationBinding: DICTATION, commandBinding: COMMAND,
-  }).step, 'chat_key');
+    delivery: 'unknown',
+  }).step, 'delivery');
   assert.equal(computeWizardState(ready()).step, 'rehearsal');
+  assert.equal(computeWizardState(ready()).canChooseDelivery, true);
 });
 
 test('the command binding cannot be recorded before the dictation one', () => {
@@ -165,7 +166,6 @@ async function rehearsedFeature(api = fakeApi()) {
   await feature.detect();
   await feature.record('dictation.begin', async () => DICTATION.input);
   await feature.record('command.begin', async () => COMMAND.input);
-  feature.setChatKey('Enter');
   feature.setDelivery('review_only');
   return feature;
 }
@@ -201,7 +201,7 @@ test('the wizard exposes a closed surface with nothing on it that can send', () 
   assert.deepEqual(Object.keys(feature).sort(), [
     'acknowledge', 'detect', 'getFlow', 'getRehearsalLog', 'getState',
     'init', 'isAvailable', 'record', 'rehearse', 'save',
-    'setChatKey', 'setDelivery',
+    'setDelivery',
   ]);
 });
 
@@ -257,12 +257,20 @@ test('a completed wizard saves the profile and the device-level bindings', async
   ]);
   assert.equal(api.saved.length, 1);
   assert.equal(api.saved[0].id, 'rocket_league');
+  assert.equal(api.saved[0].performance_preset, 'minimal');
 });
 
 test('the profile uses the Wave 7 bindings slot with shared action ids', () => {
   const profile = buildProfile(ready({ profileId: 'rocket_league' }));
   assert.deepEqual(Object.keys(profile.bindings).sort(), ['command.begin', 'dictation.begin']);
   assert.equal(profile.injection_policy, 'review_only');
+});
+
+test('wizard-built game profiles opt into the backend gaming policy for every delivery mode', () => {
+  for (const delivery of [...Object.keys(DELIVERY_MODES), 'unknown']) {
+    const profile = buildProfile(ready({ delivery }));
+    assert.equal(profile.performance_preset, 'minimal', delivery);
+  }
 });
 
 test('the profile never carries a window title or a typed game name as a match rule', () => {
@@ -323,6 +331,13 @@ test('every element id the wizard collects exists in the production page', () =>
   for (const id of Object.values(WIZARD_ELEMENT_IDS)) {
     assert.ok(html.includes(`id="${id}"`), `signal-desk.html is missing #${id}`);
   }
+});
+
+test('the wizard has no chat-key control or rehearsal dependency the profile cannot store', () => {
+  const html = fs.readFileSync(path.join(APP, 'src', 'renderer', 'signal-desk.html'), 'utf8');
+  assert.ok(!html.includes('sdUtilGameSetupChatKey'));
+  const flow = computeWizardState(ready());
+  assert.equal(flow.canRehearse, true);
 });
 
 test('the Wave 10 scenarios are registered on the production UI target', async () => {

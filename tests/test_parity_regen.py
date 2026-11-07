@@ -14,6 +14,8 @@ nit.
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -29,6 +31,7 @@ def test_coverage_paths_are_platform_independent():
     assert all("\\" not in path for path in paths)
 
 
+@pytest.mark.slow  # regenerates the full ledger (~30 s)
 def test_committed_ledger_matches_its_generator(tmp_path, monkeypatch):
     committed = build.LEDGER.read_text(encoding="utf-8")
 
@@ -56,6 +59,7 @@ def test_committed_ledger_matches_its_generator(tmp_path, monkeypatch):
         )
 
 
+@pytest.mark.slow  # regenerates the ledger twice in subprocesses (~50 s)
 def test_the_generator_is_deterministic_across_hash_seeds(tmp_path):
     """Two runs in separate interpreters must produce identical bytes.
 

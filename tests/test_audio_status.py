@@ -2,7 +2,7 @@
 
 import unittest
 
-import audio_status as status
+from backend.audio import audio_status as status
 
 
 def cfg(mode="off", binding="f10", announce=True):

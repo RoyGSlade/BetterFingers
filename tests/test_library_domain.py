@@ -218,7 +218,9 @@ def test_resend_plan_allowed_for_non_in_flight_statuses(status):
     assert plan["next_action"] == "reopen_for_review"
 
 
-@pytest.mark.parametrize("status", library.PENDING_STATUSES | library.SENT_STATUSES | library.IN_FLIGHT_STATUSES)
+# sorted(): a set's iteration order varies with the hash seed, and pytest-xdist
+# refuses to run when its workers collect the cases in different orders.
+@pytest.mark.parametrize("status", sorted(library.PENDING_STATUSES | library.SENT_STATUSES | library.IN_FLIGHT_STATUSES))
 def test_resend_plan_next_action_is_never_anything_but_reopen_for_review(status):
     plan = library.resend_plan(_draft(status=status))
     assert plan["next_action"] == "reopen_for_review"

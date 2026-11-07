@@ -11,6 +11,12 @@
 
 import { expect } from '@playwright/test';
 import { coldBoot, readyProfile } from './fixtures/cold-boot.mjs';
+import { createRequire } from 'node:module';
+import { stubNativeDialog, restoreNativeDialog } from '../harness.mjs';
+
+// The broker's own display pipeline: the dialog shows the draft wrapped and with
+// invisible characters made visible, so the expectation is built the same way.
+const { displayLines } = createRequire(import.meta.url)('../../../src/main/approvalBroker.js');
 
 const DRAFT = {
   id: 42,
@@ -46,6 +52,8 @@ const withDraft = () => ({
 // is rebuilt per run, so its handler closure always points at the fresh
 // array.
 let teachExampleRequests = [];
+// talk-send-result-surface's capture of the send POST bodies, for the same reason.
+let sendRequests = [];
 
 export const signalDeskTalkScenarios = [
   {
@@ -251,7 +259,10 @@ export const signalDeskTalkScenarios = [
       'of it away (renderSendResult() was a documented no-op), so a send that silently fell back to the clipboard ' +
       'looked identical to one that typed into the target app. This stubs a send whose backend response reports a ' +
       'real fallback (input injection unsupported, copied to clipboard instead) and asserts the send-result panel ' +
-      'shows every one of those six facts truthfully, sourced from the real response.',
+      'shows every one of those six facts truthfully, sourced from the real response. Placing text into another ' +
+      'application goes through the approval broker\'s native dialog (SECURITY.md, "Approvals"); the harness ' +
+      'answers that dialog from the main process, and the scenario asserts it showed the exact draft text and ' +
+      'that the send reached the backend carrying the signed approval.',
     backendState: () => {
       // Stateful on purpose: after the send POST, the real backend's GET
       // /drafts and /drafts/latest return the SENT draft with its
@@ -277,17 +288,36 @@ export const signalDeskTalkScenarios = [
         ...withDraft(),
         'GET /drafts/latest': () => ({ draft: sent ? sentDraft : DRAFT }),
         'GET /drafts': () => ({ drafts: [sent ? sentDraft : DRAFT] }),
-        'POST /drafts/42/send': () => {
+        'POST /drafts/42/send': (_req, { body }) => {
+          sendRequests.push(body);
           sent = true;
           return sentDraft;
         },
       };
     },
-    async navigate(_page) {},
-    async expects(page) {
+    async navigate(_page) {
+      sendRequests = [];
+    },
+    async expects(page, { app }) {
       await expect(page.locator('#sdSendResult'), 'send result panel should be hidden before any send').toBeHidden();
 
-      await page.click('#sdSendButton');
+      await stubNativeDialog(app, { answer: 'approve' });
+      let shown = [];
+      try {
+        await page.click('#sdSendButton');
+        await expect.poll(() => sendRequests.length, { message: 'the approved send reaches the backend once' }).toBe(1);
+      } finally {
+        shown = await restoreNativeDialog(app);
+      }
+
+      // The person was asked, natively, with the exact text that is placed.
+      expect(shown.length, 'exactly one native approval dialog').toBe(1);
+      expect(shown[0].title).toBe('Place this draft');
+      expect(shown[0].buttons).toEqual(['Place it', 'Cancel']);
+      expect(shown[0].detail, 'the dialog shows the exact draft text').toContain(displayLines(DRAFT.final_text).join('\n'));
+      // ...and the backend received the ticket the broker signed after that click.
+      const request = sendRequests[0];
+      expect(request && request.approval, 'the send carries the signed approval').toBeTruthy();
 
       await expect(page.locator('#sdSendResult')).toBeVisible();
       await expect(page.locator('#sdSendResultRequested')).toHaveText('paste');

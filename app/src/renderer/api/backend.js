@@ -275,7 +275,7 @@ async function cancelJob(jobId, timeoutMs = 5000) {
 }
 
 async function clearRecordings(timeoutMs = 10000) {
-  return deleteJson(`${BACKEND_ORIGIN}/recordings`, timeoutMs);
+  return deleteJson(`${BACKEND_ORIGIN}/recordings?confirm=true`, timeoutMs);
 }
 
 async function fetchDictionary(timeoutMs = 2500) {
@@ -304,7 +304,7 @@ async function fetchHistoryRecent(limit = 50, timeoutMs = 5000) {
 }
 
 async function clearHistory(timeoutMs = 10000) {
-  return deleteJson(`${BACKEND_ORIGIN}/history`, timeoutMs);
+  return deleteJson(`${BACKEND_ORIGIN}/history?confirm=true`, timeoutMs);
 }
 
 async function fetchModelRecommendation(timeoutMs = 5000) {
@@ -466,7 +466,7 @@ async function captureSelectionMessageRescueContext(timeoutMs = 5000) {
 }
 
 async function clearMessageRescueContext(timeoutMs = 5000) {
-  return deleteJson(`${MESSAGE_RESCUE_URL}/context`, timeoutMs);
+  return deleteJson(`${MESSAGE_RESCUE_URL}/context?confirm=true`, timeoutMs);
 }
 
 // `signals` is optional and only meaningful for a real dictation (F2.1
@@ -510,7 +510,7 @@ async function declineDraft(id, timeoutMs = 2500) {
 }
 
 async function clearDrafts(timeoutMs = 2500) {
-  return deleteJson(DRAFTS_URL, timeoutMs);
+  return deleteJson(`${DRAFTS_URL}?confirm=true`, timeoutMs);
 }
 
 async function retryDraft(id, timeoutMs = 120000) {
@@ -558,7 +558,9 @@ async function sendDraft(id, { action = 'copy_only', openChat = false } = {}, ti
 }
 
 async function runPrimaryAction(timeoutMs = 120000) {
-  return postJson(RUNTIME_PRIMARY_ACTION_URL, {}, timeoutMs);
+  // Typed channel (Phase 0 item 3): placing a draft needs the person's approval in
+  // a native dialog shown by the main process.
+  return typedRequest('runPrimaryAction', RUNTIME_PRIMARY_ACTION_URL, timeoutMs);
 }
 
 async function emergencyStop(timeoutMs = 10000) {
@@ -625,8 +627,12 @@ async function saveWorkflow(workflow, enabled = false, timeoutMs = 2500) {
   return postJson(`${WORKFLOWS_URL}/save`, { workflow, enabled }, timeoutMs);
 }
 
-async function approveWorkflow(workflowId, preview, timeoutMs = 2500) {
-  return postJson(`${WORKFLOWS_URL}/approve`, { workflow_id: workflowId, preview }, timeoutMs);
+// Approval is the main process's job (Phase 0 item 1): it fetches the exact preview
+// from the backend, shows it in a native dialog and signs the approval only if the
+// person clicks Approve. The renderer passes the id and NOTHING else -- not the
+// preview, which main re-derives -- so there is no preview here to tamper with.
+async function approveWorkflow(workflowId, _previewShownInThePage, timeoutMs = 5000) {
+  return typedRequest('approveWorkflow', `${WORKFLOWS_URL}/approve`, timeoutMs, workflowId);
 }
 
 /**
@@ -736,30 +742,28 @@ async function fetchPersonaExamples(name, timeoutMs = 2500) {
   return fetchJson(`${PERSONAS_URL}/${encodeURIComponent(name)}/examples`, timeoutMs);
 }
 
-async function addPersonaExample(name, raw, out, consent = false, timeoutMs = 10000) {
-  return postJson(
-    `${PERSONAS_URL}/${encodeURIComponent(name)}/examples`,
-    { raw, out, consent: consent === true },
-    timeoutMs,
-  );
+// Teaching a persona an example is consented to in a native dialog shown by the
+// main process (Phase 0 item 1), which shows the persona and the exact text. The
+// old `consent` argument is kept so callers do not change, but it is IGNORED: a
+// boolean from the page is not consent and the backend no longer accepts one.
+async function addPersonaExample(name, raw, out, _consentIgnored = false, timeoutMs = 10000) {
+  return typedRequest('addPersonaExample', `${PERSONAS_URL}/${encodeURIComponent(name)}/examples`, timeoutMs,
+    { persona: name, raw, out });
 }
 
+// Removing a learned example is an example change (round 3, item 3): main shows the example in
+// a native dialog and only a click signs the approval the backend requires.
 async function deletePersonaExample(name, exampleId, timeoutMs = 10000) {
-  return proxyRequest(
-    'DELETE',
-    `${PERSONAS_URL}/${encodeURIComponent(name)}/examples/${encodeURIComponent(exampleId)}`,
-    undefined,
-    timeoutMs,
-  );
+  return typedRequest('deleteLearnedExample',
+    `${PERSONAS_URL}/${encodeURIComponent(name)}/examples/${encodeURIComponent(exampleId)}`, timeoutMs,
+    { persona: name, exampleId });
 }
 
+// Clearing a persona's learned examples (round 4, item 3): main shows the persona and its
+// examples in a native dialog; only a click there deletes them.
 async function clearPersonaExamples(name, timeoutMs = 10000) {
-  return proxyRequest(
-    'DELETE',
-    `${PERSONAS_URL}/${encodeURIComponent(name)}/examples`,
-    undefined,
-    timeoutMs,
-  );
+  return typedRequest('clearLearnedExamples', `${PERSONAS_URL}/${encodeURIComponent(name)}/examples`, timeoutMs,
+    { persona: name });
 }
 
 // --- Contacts (Stage 11) -----------------------------------------------------
@@ -953,6 +957,23 @@ async function testWake(durationS = 10.0, timeoutMs = 15000) {
   return postJson(`${WAKE_URL}/test`, { duration_s: durationS }, Math.max(timeoutMs, durationS * 1000 + 5000));
 }
 
+async function preflightWakePhrase(
+  phrase,
+  commandVocabulary = [],
+  commonVocabulary = [],
+  timeoutMs = 5000,
+) {
+  return postJson(`${WAKE_URL}/phrase/preflight`, {
+    phrase,
+    command_vocabulary: commandVocabulary,
+    common_vocabulary: commonVocabulary,
+  }, timeoutMs);
+}
+
+async function fetchWakeQwenCapability(timeoutMs = 2500) {
+  return fetchJson(`${WAKE_URL}/qwen/capability`, timeoutMs);
+}
+
 async function trainWakePhrase(phrase, timeoutMs = 5000) {
   return postJson(`${WAKE_URL}/train`, { phrase }, timeoutMs);
 }
@@ -1027,9 +1048,8 @@ async function confirmPersonaDraft(name, structured, timeoutMs = 5000) {
   return postJson(`${PERSONAS_URL}/${encodeURIComponent(name)}/confirm`, { structured }, timeoutMs);
 }
 
-async function renamePersona(name, newName, timeoutMs = 5000) {
-  return postJson(`${PERSONAS_URL}/${encodeURIComponent(name)}/rename`, { new_name: newName }, timeoutMs);
-}
+// Round 5, item 2: there is no persona rename. It moved a persona's examples with no native
+// preview, so Phase 0 turns it off (the backend route answers 403, the Studio hides the control).
 
 async function fetchPersonaFieldGuidance(fieldId, timeoutMs = 5000) {
   return fetchJson(`${PERSONAS_URL}/field-guidance/${encodeURIComponent(fieldId)}`, timeoutMs);
@@ -1037,11 +1057,19 @@ async function fetchPersonaFieldGuidance(fieldId, timeoutMs = 5000) {
 
 async function savePersona(name, prompt, extra = null, timeoutMs = 5000) {
   const body = _mergeExtraFields({ name, prompt }, extra);
+  // Few-shot examples steer every future rewrite, so a save that carries them goes through
+  // the main process, which shows any NEW example in a native dialog and signs the approval
+  // the backend demands (round 2, item 4). Saves without examples are ordinary.
+  if (Object.prototype.hasOwnProperty.call(body, 'few_shot')) {
+    return typedRequest('savePersonaWithExamples', PERSONAS_URL, timeoutMs, { name, body });
+  }
   return postJson(PERSONAS_URL, body, timeoutMs);
 }
 
+// Deleting a persona removes its few-shot examples too (round 4, item 3): main shows them in a
+// native dialog first.
 async function deletePersona(name, timeoutMs = 5000) {
-  return proxyRequest('DELETE', `${PERSONAS_URL}/${encodeURIComponent(name)}`, undefined, timeoutMs);
+  return typedRequest('deletePersona', `${PERSONAS_URL}/${encodeURIComponent(name)}`, timeoutMs, { name });
 }
 
 // --- Persona Foundry: guided interview -> compile -> stress-test. ---
@@ -1212,7 +1240,6 @@ export {
   savePersonaDraft,
   discardPersonaDraft,
   confirmPersonaDraft,
-  renamePersona,
   fetchPersonaFieldGuidance,
   fetchTtsVoices,
   provisionVoiceCloning,
@@ -1234,6 +1261,8 @@ export {
   fetchWakeModelDownloadState,
   deleteWakeModel,
   testWake,
+  preflightWakePhrase,
+  fetchWakeQwenCapability,
   trainWakePhrase,
   fetchWakeTrainStatus,
   importWakeModel,

@@ -1,8 +1,8 @@
 import unittest
 from unittest.mock import patch
 
-from hotkey_manager import HotkeyManager
-from utils import validate_profile_settings
+from backend.input.hotkey_manager import HotkeyManager
+from backend.config.utils import validate_profile_settings
 
 
 class _DummyRecorder:
@@ -47,7 +47,7 @@ class HotkeyManagerTTSTests(unittest.TestCase):
             },
         }
 
-    @patch("hotkey_manager.load_profile")
+    @patch("backend.input.hotkey_manager.load_profile")
     def test_registers_and_dispatches_review_tts_hotkey(self, load_profile):
         load_profile.return_value = self._config()
         tts_hits = {"count": 0}
@@ -69,7 +69,7 @@ class HotkeyManagerTTSTests(unittest.TestCase):
         manager.stop()
         self.assertFalse(manager._running)
 
-    @patch("hotkey_manager.load_profile")
+    @patch("backend.input.hotkey_manager.load_profile")
     def test_dedupes_review_tts_when_same_as_manual_send(self, load_profile):
         load_profile.return_value = self._config(review_key="f9", manual_key="f9")
 
@@ -86,7 +86,7 @@ class HotkeyManagerTTSTests(unittest.TestCase):
         manager.stop()
         self.assertFalse(manager._running)
 
-    @patch("hotkey_manager.load_profile")
+    @patch("backend.input.hotkey_manager.load_profile")
     def test_normalizes_uppercase_hotkey_letters_before_hooking(self, load_profile):
         config = self._config(review_key="ctrl+shift+A", manual_key="ctrl+shift+X")
         config["hotkey"] = "ctrl+shift+Z"
@@ -102,7 +102,7 @@ class HotkeyManagerTTSTests(unittest.TestCase):
         self.assertEqual(manager.manual_send_hotkey, "ctrl+shift+x")
         self.assertEqual(manager.review_tts_hotkey, "ctrl+shift+a")
 
-    @patch("hotkey_manager.load_profile")
+    @patch("backend.input.hotkey_manager.load_profile")
     def test_update_config_restarts_for_review_tts_hotkey_change(self, load_profile):
         load_profile.side_effect = [
             self._config(review_key="ctrl+shift+space"),
@@ -121,7 +121,7 @@ class HotkeyManagerTTSTests(unittest.TestCase):
             stop_mock.assert_called_once()
             start_mock.assert_called_once()
 
-    @patch("hotkey_manager.load_profile")
+    @patch("backend.input.hotkey_manager.load_profile")
     def test_defaults_and_dispatches_selection_rewrite_hotkey(self, load_profile):
         config = self._config()
         config.pop("selection_rewrite_hotkey")
@@ -138,7 +138,7 @@ class HotkeyManagerTTSTests(unittest.TestCase):
         manager._selection_rewrite_trigger()
         self.assertEqual(rewrite_hits["count"], 1)
 
-    @patch("hotkey_manager.load_profile")
+    @patch("backend.input.hotkey_manager.load_profile")
     def test_explicit_empty_selection_rewrite_hotkey_stays_disabled(self, load_profile):
         load_profile.return_value = self._config(selection_rewrite_key="")
         manager = HotkeyManager(
@@ -149,7 +149,7 @@ class HotkeyManagerTTSTests(unittest.TestCase):
 
         self.assertEqual(manager.selection_rewrite_hotkey, "")
 
-    @patch("hotkey_manager.load_profile")
+    @patch("backend.input.hotkey_manager.load_profile")
     def test_update_config_restarts_for_selection_rewrite_hotkey_change(self, load_profile):
         load_profile.side_effect = [
             self._config(selection_rewrite_key="ctrl+alt+r"),
@@ -194,7 +194,7 @@ class HotkeyManagerWatchdogTests(unittest.TestCase):
             config["max_recording_seconds"] = max_recording_seconds
         return config
 
-    @patch("hotkey_manager.load_profile")
+    @patch("backend.input.hotkey_manager.load_profile")
     def test_defaults_to_120_seconds(self, load_profile):
         load_profile.return_value = self._config()
         manager = HotkeyManager(
@@ -204,7 +204,7 @@ class HotkeyManagerWatchdogTests(unittest.TestCase):
         )
         self.assertEqual(manager.max_recording_seconds, 120.0)
 
-    @patch("hotkey_manager.load_profile")
+    @patch("backend.input.hotkey_manager.load_profile")
     def test_clamps_to_valid_range(self, load_profile):
         load_profile.return_value = self._config(max_recording_seconds=1)
         manager = HotkeyManager(
@@ -222,7 +222,7 @@ class HotkeyManagerWatchdogTests(unittest.TestCase):
         )
         self.assertEqual(manager.max_recording_seconds, 1800.0)
 
-    @patch("hotkey_manager.load_profile")
+    @patch("backend.input.hotkey_manager.load_profile")
     def test_start_recording_arms_watchdog_timer(self, load_profile):
         load_profile.return_value = self._config(max_recording_seconds=120)
         manager = HotkeyManager(
@@ -234,7 +234,7 @@ class HotkeyManagerWatchdogTests(unittest.TestCase):
         self.assertIsNotNone(manager._watchdog_timer)
         manager._stop_recording(reason="manual")
 
-    @patch("hotkey_manager.load_profile")
+    @patch("backend.input.hotkey_manager.load_profile")
     def test_normal_stop_cancels_watchdog(self, load_profile):
         load_profile.return_value = self._config(max_recording_seconds=120)
         manager = HotkeyManager(
@@ -246,7 +246,7 @@ class HotkeyManagerWatchdogTests(unittest.TestCase):
         manager._stop_recording(reason="manual")
         self.assertIsNone(manager._watchdog_timer)
 
-    @patch("hotkey_manager.load_profile")
+    @patch("backend.input.hotkey_manager.load_profile")
     def test_watchdog_fire_force_stops_and_calls_callback(self, load_profile):
         load_profile.return_value = self._config(max_recording_seconds=120)
         completed = []
@@ -266,7 +266,7 @@ class HotkeyManagerWatchdogTests(unittest.TestCase):
         self.assertEqual(warnings["count"], 1)
         self.assertEqual(len(completed), 1)
 
-    @patch("hotkey_manager.load_profile")
+    @patch("backend.input.hotkey_manager.load_profile")
     def test_watchdog_fire_is_noop_if_already_stopped(self, load_profile):
         load_profile.return_value = self._config(max_recording_seconds=120)
         completed = []

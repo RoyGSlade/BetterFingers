@@ -19,7 +19,7 @@ if str(ROOT) not in sys.path:
 
 import version  # noqa: E402
 
-TARGET_VERSION = "1.1.0-alpha.3"
+TARGET_VERSION = "1.1.0-alpha.4"
 
 
 def test_version_file_holds_the_release_target():
@@ -43,11 +43,11 @@ def test_electron_package_version_matches():
 
 def test_runtime_version_endpoint_reports_the_single_source():
     """/runtime/version must not re-hardcode a literal."""
-    source = (ROOT / "server.py").read_text(encoding="utf-8")
+    source = (ROOT / "backend/api/routes/diagnostics.py").read_text(encoding="utf-8")
     match = re.search(
-        r"@app\.get\(\"/runtime/version\"\).*?\n\n", source, re.DOTALL
+        r"@router\.get\(\"/runtime/version\"\).*?\n\n", source, re.DOTALL
     )
-    assert match, "could not locate the /runtime/version handler in server.py"
+    assert match, "could not locate the /runtime/version handler in backend/api/routes/diagnostics.py"
     handler = match.group(0)
     assert "version.BACKEND_VERSION" in handler or "BACKEND_VERSION" in handler, (
         "/runtime/version still hard-codes a version literal instead of reading version.py"

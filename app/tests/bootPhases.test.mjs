@@ -52,6 +52,55 @@ test('ready requires both a healthy sidecar AND doctor reporting nothing still p
   assert.notEqual(phase, 'ready'); // stt still 'starting' -- do not declare ready on a technicality
 });
 
+// A fresh profile with no speech model must reach the app (and its Download
+// button) instead of waiting on the splash for a load that local-only STT will
+// never attempt. The backend reports the typed reason in stt.error_code.
+for (const errorCode of ['model_missing', 'verification_failed']) {
+  test(`stt error_code ${errorCode} resolves to a failed row and cannot hold the splash`, () => {
+    const doctor = {
+      stt: { initialized: true, loaded: false, error_code: errorCode },
+      tts: { initialized: true, loaded: true },
+    };
+    const sttRow = deriveServices(doctor).find((s) => s.key === 'stt');
+    assert.equal(sttRow.status, 'failed');
+    assert.ok(sttRow.message && sttRow.message.length > 0, 'the failed row must say why');
+    assert.doesNotMatch(sttRow.message, /CPU/);
+    assert.equal(derivePhase({ elapsedMs: 500, doctor, sidecarOutcome: 'ready' }), 'ready');
+    assert.equal(derivePhase({ elapsedMs: 30000, doctor, sidecarOutcome: 'ready' }), 'ready');
+  });
+}
+
+test('a loaded speech model stays online even if a stale error_code is present', () => {
+  const doctor = { stt: { initialized: true, loaded: true, error_code: 'model_missing' } };
+  assert.equal(deriveServices(doctor).find((s) => s.key === 'stt').status, 'online');
+});
+
+test('a null stt error_code keeps an initialized-but-unloaded model in starting (not ready)', () => {
+  const doctor = { stt: { initialized: true, loaded: false, error_code: null } };
+  assert.equal(deriveServices(doctor).find((s) => s.key === 'stt').status, 'starting');
+  assert.notEqual(derivePhase({ elapsedMs: 500, doctor, sidecarOutcome: 'ready' }), 'ready');
+});
+
+test('an unrelated stt error_code does not masquerade as a missing model', () => {
+  const doctor = { stt: { initialized: true, loaded: false, error_code: 'stt_model_load_failed' } };
+  assert.equal(deriveServices(doctor).find((s) => s.key === 'stt').status, 'starting');
+});
+
+// The backend derives stt.using_cpu_fallback from its published status snapshot
+// (QA D6: it used to stay false while error_state was fallback_active). The row
+// says "CPU" only when the backend reports a real CUDA -> CPU fallback.
+test('a loaded speech model that fell back from CUDA says it is running on CPU', () => {
+  const doctor = { stt: { initialized: true, loaded: true, device: 'cpu', using_cpu_fallback: true } };
+  const row = deriveServices(doctor).find((s) => s.key === 'stt');
+  assert.equal(row.status, 'online');
+  assert.match(row.message, /CPU/);
+});
+
+test('a loaded speech model on CPU by choice does not claim a GPU fallback', () => {
+  const doctor = { stt: { initialized: true, loaded: true, device: 'cpu', using_cpu_fallback: false } };
+  assert.equal(deriveServices(doctor).find((s) => s.key === 'stt').message, '');
+});
+
 test('ready is trusted when sidecar is healthy and doctor has nothing further to add', () => {
   const phase = derivePhase({ elapsedMs: 500, doctor: null, sidecarOutcome: 'ready' });
   assert.equal(phase, 'ready');

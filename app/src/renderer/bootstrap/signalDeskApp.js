@@ -41,6 +41,7 @@ import {
   collectUtilitiesElements,
   UTILITIES_SECTION_META,
 } from '../features/utilitiesWorkspace.js';
+import { createBugReportFeature, collectBugReportElements } from '../features/bugReport.js';
 import { createSettingsWorkspaceFeature, collectSettingsElements } from '../features/settingsWorkspace.js';
 import { createVoiceStudioFeature } from '../features/voiceStudio.js';
 import { createStructuredPersonaEditor } from '../features/structuredPersonaEditor.js';
@@ -119,6 +120,38 @@ export async function loadPersonaList(fetchPersonas, previous = {}) {
     }
   }
   return { personas: previous, failed: true };
+}
+
+/**
+ * Build the two Settings mutation hooks that keep the other workspaces from
+ * rendering a profile which is no longer active.
+ *
+ * Profile/output reads run first because Studio's refresh reads the active
+ * persona through the composition root. Promise.allSettled is deliberate:
+ * one unavailable panel must not prevent every other consumer from healing,
+ * and Settings invokes these hooks as notifications rather than awaiting them.
+ */
+export function createSettingsConsumerSyncHooks({
+  refreshProfileSettings,
+  refreshOutputSettings,
+  refreshModels,
+  refreshStudio,
+} = {}) {
+  const invoke = (fn) => Promise.resolve().then(() => fn?.());
+  const synchronize = async () => {
+    await Promise.allSettled([
+      invoke(refreshProfileSettings),
+      invoke(refreshOutputSettings),
+    ]);
+    await Promise.allSettled([
+      invoke(refreshModels),
+      invoke(refreshStudio),
+    ]);
+  };
+  return {
+    onProfileChanged: synchronize,
+    onProfileSaved: synchronize,
+  };
 }
 
 /**
@@ -332,6 +365,12 @@ export function startSignalDeskApp(doc = document) {
     hooks: { showToast, confirmFn: (message) => doc.defaultView?.confirm?.(message) },
   });
   utilitiesWorkspace.init('models');
+
+  const bugReport = createBugReportFeature({
+    elements: collectBugReportElements(doc),
+    bridge: doc.defaultView?.betterFingers,
+    hooks: { showToast },
+  });
 
   // messageRescuePanel.js / textPlayground.js are "REUSED VERBATIM" by
   // utilitiesWorkspace.js's own header comment -- it side-effect-imports them
@@ -702,12 +741,19 @@ export function startSignalDeskApp(doc = document) {
   // --- Settings workspace ---------------------------------------------------
 
   const settingsElements = collectSettingsElements(doc);
+  const settingsConsumerSyncHooks = createSettingsConsumerSyncHooks({
+    refreshProfileSettings,
+    refreshOutputSettings,
+    refreshModels: () => utilitiesWorkspace.refreshModels(),
+    refreshStudio: () => studioWorkspace.refresh(),
+  });
   const settingsWorkspace = createSettingsWorkspaceFeature({
     elements: settingsElements,
     hooks: {
       showToast,
       confirmFn: (message) => doc.defaultView?.confirm?.(message),
       updatesApi: doc.defaultView?.betterFingers?.updates,
+      ...settingsConsumerSyncHooks,
     },
   });
   settingsWorkspace.init('profile');
@@ -1080,6 +1126,7 @@ export function startSignalDeskApp(doc = document) {
       clearInterval(initialPopulateInterval);
       applicationProfiles.destroy?.();
       settingsWorkspace.destroy?.();
+      bugReport.destroy?.();
       voiceStatusConnection.close?.();
       talkWorkspace.destroy?.();
       talkCapture.destroy?.();

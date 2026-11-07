@@ -72,9 +72,9 @@ class ServerSettingsModelsTests(unittest.TestCase):
 
     def test_settings_profile_create_save_and_activate(self):
         with tempfile.TemporaryDirectory() as tmp:
-            with patch("utils.get_profiles_dir", return_value=tmp), patch.object(
+            with patch("backend.config.utils.get_profiles_dir", return_value=tmp), patch.object(
                 server, "get_profiles_dir", return_value=tmp
-            ), patch("utils._app_state_path", return_value=os.path.join(tmp, "app_state.yaml")):
+            ), patch("backend.config.utils._app_state_path", return_value=os.path.join(tmp, "app_state.yaml")):
                 with TestClient(server.app) as client:
                     created = client.post("/settings/profiles", json={"name": "Linux Dev", "settings": {"hotkey": "f7"}})
                     profiles = client.get("/settings/profiles")
@@ -126,7 +126,7 @@ class ServerSettingsModelsTests(unittest.TestCase):
             model_path = os.path.join(tmp, "model.gguf")
             with open(model_path, "wb") as handle:
                 handle.write(b"model")
-            with patch("utils.get_profiles_dir", return_value=tmp), patch("utils._app_state_path", return_value=os.path.join(tmp, "app_state.yaml")), patch.object(
+            with patch("backend.config.utils.get_profiles_dir", return_value=tmp), patch("backend.config.utils._app_state_path", return_value=os.path.join(tmp, "app_state.yaml")), patch.object(
                 server, "get_model_path", return_value=model_path
             ), patch.object(server, "get_server_path", return_value=os.path.join(tmp, "llama-server")), patch.object(
                 server, "check_and_download_resources", return_value={"ok": True, "message": "ready"}

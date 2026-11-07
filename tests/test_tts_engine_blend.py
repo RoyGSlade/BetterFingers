@@ -20,7 +20,7 @@ TTSEngineTests (e.g. test_repeated_speak_replaces_pending_queue_item).
 import unittest
 from unittest.mock import Mock, patch
 
-from tts_engine import ReviewTTSEngine
+from backend.tts.tts_engine import ReviewTTSEngine
 
 
 class GetCapabilitiesTests(unittest.TestCase):

@@ -28,9 +28,9 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-import data_categories as dc
-import data_lifecycle as dl
-import data_registry as dr
+from backend.privacy import data_categories as dc
+from backend.privacy import data_lifecycle as dl
+from backend.privacy import data_registry as dr
 import server
 
 
@@ -43,16 +43,16 @@ class _ResetRootMixin(unittest.TestCase):
         self.electron_root = pathlib.Path(self._electron.name) / "BetterFingers"
         self.electron_root.mkdir(parents=True, exist_ok=True)
         patchers = [
-            patch("app_paths.resolve_base", return_value=self.root),
-            patch("utils.get_user_data_path", return_value=str(self.root)),
-            patch("history_store.get_user_data_path", return_value=str(self.root)),
-            patch("recordings.get_user_data_path", return_value=str(self.root)),
+            patch("backend.config.app_paths.resolve_base", return_value=self.root),
+            patch("backend.config.utils.get_user_data_path", return_value=str(self.root)),
+            patch("backend.stores.history_store.get_user_data_path", return_value=str(self.root)),
+            patch("backend.stores.recordings.get_user_data_path", return_value=str(self.root)),
             patch("server.get_user_data_path", return_value=str(self.root)),
             # Electron's userData root is a genuinely different directory from
             # ours on every platform, so it is pinned separately rather than
             # folded into the unified root — otherwise the cross-boundary claim
             # would be tested against a setup that has no boundary in it.
-            patch("data_paths.electron_user_data_candidates",
+            patch("backend.privacy.data_paths.electron_user_data_candidates",
                   return_value=[self.electron_root]),
         ]
         for p in patchers:

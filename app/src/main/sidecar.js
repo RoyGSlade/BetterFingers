@@ -5,6 +5,7 @@ const { spawn } = require('node:child_process');
 const { app } = require('electron');
 const { EXPECTED_API_SCHEMA_VERSION } = require('./config');
 const { resolveUserDataRoot } = require('./userDataRoot');
+const { redactSecrets, createLineRedactor } = require('./redact');
 
 // How the post-startup health monitor behaves once the backend is ready.
 // A busy backend is not a dead backend: restarting on missed pings alone
@@ -18,12 +19,11 @@ const MAX_AUTO_RESTARTS = 3; // give up (and tell the user) after this many
 const RESTART_COUNTER_RESET_MS = 5 * 60 * 1000; // a clean 5min resets the count
 
 // A dev backend is a python process already resident on disk. A packaged
-// backend is a PyInstaller --onefile binary that must self-extract to a temp
-// dir before Python even starts — on a cold, RAM-constrained, CPU-only Linux
-// box that extraction + interpreter startup + FastAPI import can plausibly
-// exceed 30s on its own, before the app has done any real work. Give the
-// packaged path more room; keep dev tight since a hang there usually means a
-// real bug, not I/O.
+// backend is a PyInstaller onedir bundle whose interpreter and native modules
+// still have to load from the application resources tree. On a cold,
+// RAM-constrained, CPU-only Linux box that startup can plausibly exceed 30s
+// before the app has done any real work. Give the packaged path more room;
+// keep dev tight since a hang there usually means a real bug, not I/O.
 const DEV_HEALTH_TIMEOUT_MS = 30000;
 const PACKAGED_HEALTH_TIMEOUT_MS = 90000;
 const POSIX_STOP_GRACE_MS = 5000;
@@ -222,9 +222,12 @@ async function tryReadHealth(url, headers = {}) {
   }
 }
 
-// build-backend.js runs PyInstaller with --onefile --name betterfingers-backend,
-// so the packaged artifact is a single executable by that name; the other
-// preferred names are legacy/alternate build fallbacks, not the normal case.
+// build-backend.js runs PyInstaller with --onedir --name
+// betterfingers-backend, so the normal packaged artifact is nested at
+// backend/betterfingers-backend/betterfingers-backend(.exe). Keeping native
+// modules visible in that bundle lets the Windows release gate sign and verify
+// every loadable PE before packaging instead of extracting opaque contents to
+// %TEMP% at runtime. Top-level names remain legacy/alternate build fallbacks.
 // electron-builder's extraResources ("from": "resources/backend", "to":
 // "backend" in app/package.json's build block) copies build:backend's output
 // into <packaged-resources>/backend, and process.resourcesPath is exactly
@@ -246,12 +249,20 @@ function isExecutableFile(candidatePath) {
 
 function resolveBackendExecutable() {
   const backendDir = path.join(process.resourcesPath, 'backend');
-  const preferredNames = [
-    'betterfingers-backend.exe',
-    'betterfingers-backend',
+  const bundleName = 'betterfingers-backend';
+  const platformExecutableName = process.platform === 'win32'
+    ? `${bundleName}.exe`
+    : bundleName;
+  const preferredRelativePaths = [
+    path.join(bundleName, platformExecutableName),
+    path.join(bundleName, `${bundleName}.exe`),
+    path.join(bundleName, bundleName),
+    `${bundleName}.exe`,
+    bundleName,
     'server.exe',
     'server',
   ];
+  const uniquePreferredRelativePaths = [...new Set(preferredRelativePaths)];
 
   if (!fs.existsSync(backendDir)) {
     throw new Error(
@@ -261,8 +272,8 @@ function resolveBackendExecutable() {
     );
   }
 
-  for (const candidate of preferredNames) {
-    const candidatePath = path.join(backendDir, candidate);
+  for (const relativePath of uniquePreferredRelativePaths) {
+    const candidatePath = path.join(backendDir, relativePath);
     if (fs.existsSync(candidatePath)) {
       if (!isExecutableFile(candidatePath)) {
         throw new Error(
@@ -284,7 +295,7 @@ function resolveBackendExecutable() {
   if (!fallback) {
     throw new Error(
       `No executable backend found in ${backendDir}. Expected one of: ` +
-      `${preferredNames.join(', ')} (built via \`npm run build:backend\`), or at least one ` +
+      `${uniquePreferredRelativePaths.join(', ')} (built via \`npm run build:backend\`), or at least one ` +
       'executable file in that directory.',
     );
   }
@@ -378,6 +389,7 @@ function createSidecar({
   host = '127.0.0.1',
   port = 8000,
   authToken = '',
+  approvalKey = '',
   devCommand = 'python',
   devArgs = [],
   onStatusChange = null,
@@ -400,6 +412,12 @@ function createSidecar({
 } = {}) {
   const healthUrl = `http://${host}:${port}/health`;
   const backendHeaders = authHeaders(authToken);
+  // Round 2, item 3: NO credential goes in the backend's environment. On Linux the
+  // initial environment of a process stays readable through /proc/<pid>/environ for its
+  // whole life, so any same-user program could read the bearer token and the approval
+  // key and forge approvals. They are written to the child's stdin pipe instead
+  // (writeSecretsToChild below), announced only by a flag. Names that could carry them
+  // in from our own environment are stripped even if present.
   const backendEnv = buildBackendEnv({
     platform,
     parentEnv,
@@ -407,9 +425,22 @@ function createSidecar({
     runtimeEnv: {
       BETTERFINGERS_LAZY_STARTUP: '1',
       BETTERFINGERS_ENV: isPackaged ? 'production' : 'development',
-      BETTERFINGERS_AUTH_TOKEN: authToken,
+      ...(authToken || approvalKey ? { BETTERFINGERS_SECRETS_STDIN: '1' } : {}),
     },
   });
+  delete backendEnv.BETTERFINGERS_AUTH_TOKEN;
+  delete backendEnv.BETTERFINGERS_APPROVAL_KEY;
+
+  // Hand the credentials to a freshly spawned backend over its stdin and close it.
+  function writeSecretsToChild(child) {
+    if (!child || !child.stdin || typeof child.stdin.end !== 'function') return;
+    try {
+      child.stdin.on?.('error', () => {}); // a backend that died early must not crash main
+      child.stdin.end(JSON.stringify({ token: authToken || '', approval_key: approvalKey || '' }));
+    } catch {
+      /* the backend will fail its own startup check, which is the safe outcome */
+    }
+  }
   let childProcess = null;
   let startPromise = null;
   let logBuffer = [];
@@ -450,6 +481,19 @@ function createSidecar({
     }
   }
 
+  // The on-disk raw log (sidecar_backend_raw.log in Electron's userData) is a
+  // privacy-inventory category that a factory reset deletes. Left on, this module
+  // recreates it within the same second with the reset request's own access-log
+  // lines, so "Check what's left" would report it present right after a reset that
+  // verified. The factory-reset IPC handler therefore turns file logging off for
+  // the rest of the session (the in-memory buffer is untouched); a new launch
+  // starts with it on.
+  let rawLogEnabled = true;
+
+  function setRawLogEnabled(enabled) {
+    rawLogEnabled = enabled === true;
+  }
+
   function appendLog(streamName, data) {
     const text = String(data);
     const lines = text.split('\n');
@@ -463,7 +507,9 @@ function createSidecar({
       if (!line && line === lines[lines.length - 1]) {
         continue;
       }
-      const logLine = `[${timestamp}] [${streamName}] ${line}`;
+      // A credential never reaches the in-memory buffer, the raw log file or the
+      // renderer's log view (Phase 0 item 10).
+      const logLine = `[${timestamp}] [${streamName}] ${redactSecrets(line)}`;
       logBuffer.push(logLine);
       fileChunk += logLine + '\n';
     }
@@ -473,6 +519,9 @@ function createSidecar({
     }
 
     try {
+      if (!rawLogEnabled) {
+        return;
+      }
       const logFilePath = userDataPath || (app?.getPath ? path.join(app.getPath('userData'), 'sidecar_backend_raw.log') : null);
       if (!logFilePath) {
         return;
@@ -500,7 +549,7 @@ function createSidecar({
 
       try {
         const logFilePath = userDataPath || (app?.getPath ? path.join(app.getPath('userData'), 'sidecar_backend_raw.log') : null);
-        if (logFilePath) {
+        if (logFilePath && rawLogEnabled) {
           // Preserve prior sessions for diagnostics: append a separator instead of
           // wiping, and trim from the front if the file grows past ~2 MB.
           const maxLogFileBytes = 2 * 1024 * 1024;
@@ -570,7 +619,7 @@ function createSidecar({
           appendLog('electron', `Spawning packaged backend executable at: ${executablePath}`);
           processRef = spawnOwnedBackend(executablePath, ['--host', host, '--port', String(port)], {
             cwd: path.dirname(executablePath),
-            stdio: ['ignore', 'pipe', 'pipe'],
+            stdio: [authToken || approvalKey ? 'pipe' : 'ignore', 'pipe', 'pipe'],
             windowsHide: true,
             env: backendEnv,
           }, { platform, spawnImpl: spawnProcess });
@@ -578,11 +627,12 @@ function createSidecar({
           appendLog('electron', `Spawning dev backend: ${devCommand} ${devArgs.join(' ')}`);
           processRef = spawnOwnedBackend(devCommand, devArgs, {
             cwd: path.resolve(__dirname, '../../../'),
-            stdio: ['ignore', 'pipe', 'pipe'],
+            stdio: [authToken || approvalKey ? 'pipe' : 'ignore', 'pipe', 'pipe'],
             windowsHide: true,
             env: backendEnv,
           }, { platform, spawnImpl: spawnProcess });
         }
+        writeSecretsToChild(processRef);
         childProcess = processRef;
 
         if (!isCurrentLifecycle()) {
@@ -605,15 +655,23 @@ function createSidecar({
           error: '',
         });
 
-        processRef.stdout?.on('data', (chunk) => {
-          process.stdout.write(`[backend] ${chunk}`);
-          appendLog('stdout', chunk);
-        });
-
-        processRef.stderr?.on('data', (chunk) => {
-          process.stderr.write(`[backend] ${chunk}`);
-          appendLog('stderr', chunk);
-        });
+        // One line redactor per stream: a secret split across two chunks is only visible once the
+        // line is whole, so each stream's unfinished line is held until its newline arrives
+        // (round 2, item 7). Everything downstream (console, buffer, file) gets redacted lines.
+        const forward = (streamName, sink, lines) => {
+          if (!lines.length) return;
+          sink.write(lines.map((line) => `[backend] ${line}\n`).join(''));
+          appendLog(streamName, lines.join('\n'));
+        };
+        const stdoutLines = createLineRedactor();
+        const stderrLines = createLineRedactor();
+        processRef.stdout?.on('data', (chunk) => forward('stdout', process.stdout, stdoutLines.push(chunk)));
+        processRef.stderr?.on('data', (chunk) => forward('stderr', process.stderr, stderrLines.push(chunk)));
+        const flushStreams = () => {
+          forward('stdout', process.stdout, stdoutLines.flush());
+          forward('stderr', process.stderr, stderrLines.flush());
+        };
+        processRef.once?.('exit', flushStreams);
 
         exitPromise = new Promise((resolve, reject) => {
           exitListener = (code, signal) => {
@@ -962,6 +1020,8 @@ function createSidecar({
     isRunning,
     getStatus: () => ({ ...status, pid: childProcess?.pid ?? status.pid }),
     getLogs: () => [...logBuffer],
+    setRawLogEnabled,
+    isRawLogEnabled: () => rawLogEnabled,
     healthUrl,
   };
 }

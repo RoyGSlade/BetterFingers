@@ -1,5 +1,11 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
+// The DASHBOARD's bridge (signal-desk.html, its preview and the legacy index.html).
+// The overlay, review window and splash each have their own minimal preload
+// (preload-overlay.js, preload-review.js, preload-splash.js) and receive none of
+// this: Phase 0 item 7. Main also refuses every channel below from any page that
+// is not the dashboard (ipcPolicy.js), so the two layers fail independently.
+
 // Phase 3c: the renderer never receives the bearer token or the backend origin.
 // All backend access goes through the main-process proxy below.
 const api = {
@@ -10,14 +16,42 @@ const api = {
   // Typed operations: destructive/sensitive routes are refused by the generic
   // proxy and only reachable through these fixed-shape channels.
   fetchHealth: (timeoutMs) => ipcRenderer.invoke('backend:fetch-health', { timeoutMs }),
+  // Placing a draft into another application. Main shows a native dialog with the
+  // exact text and signs the approval the backend requires; this call only asks.
   sendDraft: (id, { action, openChat, allowResend } = {}, timeoutMs) =>
     ipcRenderer.invoke('backend:send-draft', { id, action, openChat, allowResend, timeoutMs }),
-  wipePrivacyData: ({ wipeVoices, confirm, mode } = {}, timeoutMs) =>
-    ipcRenderer.invoke('backend:wipe-privacy', { wipeVoices, confirm, mode, timeoutMs }),
+  // The Primary Action button: the backend picks the draft, main shows it and asks.
+  runPrimaryAction: (timeoutMs) => ipcRenderer.invoke('backend:primary-action', { timeoutMs }),
+  // Approvals. The renderer names WHAT to approve (a workflow id, a persona and the
+  // example text); main fetches the rest from the backend, shows the person a native
+  // dialog and only on their click signs the proof the backend demands. Nothing
+  // returned here is, or can be turned into, an approval.
+  approveWorkflow: (workflowId, timeoutMs) =>
+    ipcRenderer.invoke('approvals:workflow', { workflowId, timeoutMs }),
+  addPersonaExample: ({ persona, raw, out } = {}, timeoutMs) =>
+    ipcRenderer.invoke('approvals:persona-example', { persona, raw, out, timeoutMs }),
+  // Saving a persona whose few-shot examples change: main shows the added examples in a
+  // native dialog before the backend will accept them.
+  savePersonaWithExamples: ({ name, body } = {}, timeoutMs) =>
+    ipcRenderer.invoke('approvals:persona-save', { name, body, timeoutMs }),
+  // Removing a learned example changes what the persona learns from: main shows it and asks.
+  deleteLearnedExample: ({ persona, exampleId } = {}, timeoutMs) =>
+    ipcRenderer.invoke('approvals:persona-learned-delete', { persona, exampleId, timeoutMs }),
+  // Clearing a persona's learned examples, and deleting a persona with its examples (round 4,
+  // item 3): main shows the scope in a native dialog and asks.
+  clearLearnedExamples: ({ persona } = {}, timeoutMs) =>
+    ipcRenderer.invoke('approvals:persona-learned-clear', { persona, timeoutMs }),
+  deletePersona: ({ name } = {}, timeoutMs) =>
+    ipcRenderer.invoke('approvals:persona-delete', { name, timeoutMs }),
+  // Privacy wipes, the factory reset and the global learned-example clear (round 4, item 3):
+  // each opens a native dialog in main listing what it deletes. Nothing the page sends, a
+  // `confirm` flag included, approves it; the factory reset's phrase is still required as well.
+  wipePrivacyData: ({ wipeVoices, mode } = {}, timeoutMs) =>
+    ipcRenderer.invoke('backend:wipe-privacy', { wipeVoices, mode, timeoutMs }),
   factoryReset: ({ confirm, deleteDownloadedModels } = {}, timeoutMs) =>
     ipcRenderer.invoke('backend:factory-reset', { confirm, deleteDownloadedModels, timeoutMs }),
-  clearPersonaLearning: ({ confirm } = {}, timeoutMs) =>
-    ipcRenderer.invoke('backend:clear-persona-learning', { confirm, timeoutMs }),
+  clearPersonaLearning: (_unused, timeoutMs) =>
+    ipcRenderer.invoke('backend:clear-persona-learning', { timeoutMs }),
   deleteLlmModel: (modelId, { confirm } = {}, timeoutMs) =>
     ipcRenderer.invoke('backend:delete-llm-model', { modelId, confirm, timeoutMs }),
   deleteWhisperModel: (modelSize, { confirm } = {}, timeoutMs) =>
@@ -29,6 +63,14 @@ const api = {
     ipcRenderer.invoke('backend:upload-voice-sample', payload),
   uploadWakeModel: (payload) =>
     ipcRenderer.invoke('backend:upload-wake-model', payload),
+  // Bug-report diagnostics never cross this bridge from the renderer. Main
+  // gathers and curates them, returns an immutable preview, then accepts only
+  // that preview id plus a fixed destination for the final confirmed action.
+  getBugReportConfig: () => ipcRenderer.invoke('bug-report:get-config'),
+  prepareBugReport: ({ summary, steps, expected, actual, contact } = {}) =>
+    ipcRenderer.invoke('bug-report:prepare', { summary, steps, expected, actual, contact }),
+  submitBugReport: ({ previewId, destination } = {}) =>
+    ipcRenderer.invoke('bug-report:submit', { previewId, destination }),
   voiceStatus: {
     start: () => ipcRenderer.invoke('backend:voice-status:start'),
     stop: () => ipcRenderer.invoke('backend:voice-status:stop'),
@@ -50,6 +92,7 @@ const api = {
   updates: {
     getState: () => ipcRenderer.invoke('updates:get-state'),
     check: () => ipcRenderer.invoke('updates:check'),
+    setAutomatic: (enabled) => ipcRenderer.invoke('updates:set-automatic', enabled),
     download: () => ipcRenderer.invoke('updates:download'),
     install: () => ipcRenderer.invoke('updates:install'),
     onState: (callback) => {
@@ -101,28 +144,3 @@ const api = {
 };
 
 contextBridge.exposeInMainWorld('betterFingers', api);
-
-contextBridge.exposeInMainWorld('betterFingersOverlay', {
-  onStatusUpdate: (callback) => ipcRenderer.on('overlay:update', (_event, status) => callback(status)),
-  onAppearance: (callback) => ipcRenderer.on('overlay:appearance', (_event, appearance) => callback(appearance)),
-  setIgnoreMouseEvents: (ignore) => ipcRenderer.invoke('overlay:set-ignore-mouse-events', ignore),
-});
-
-contextBridge.exposeInMainWorld('betterFingersSplash', {
-  // Pushed by main every ~500ms while booting (see main.js's pushBootSnapshot).
-  onBootEvent: (callback) => {
-    const handler = (_event, snapshot) => callback(snapshot);
-    ipcRenderer.on('splash:boot', handler);
-    return () => ipcRenderer.removeListener('splash:boot', handler);
-  },
-  // Pull for the first paint, in case boot started before this page attached
-  // its listener.
-  getState: () => ipcRenderer.invoke('splash:get-state'),
-  retry: () => ipcRenderer.invoke('splash:retry'),
-});
-
-contextBridge.exposeInMainWorld('betterFingersReview', {
-  hide: () => ipcRenderer.invoke('review:hide'),
-  onDraft: (callback) => ipcRenderer.on('review:draft', (_event, draft) => callback(draft)),
-  onStatus: (callback) => ipcRenderer.on('review:status', (_event, status) => callback(status)),
-});

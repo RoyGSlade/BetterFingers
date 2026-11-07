@@ -1,6 +1,6 @@
 import unittest
 
-from voice_edit_commands import (
+from backend.commands.voice_edit_commands import (
     apply_inline_edits,
     capitalize_word,
     delete_last_sentence,

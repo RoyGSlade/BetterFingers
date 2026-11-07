@@ -2,7 +2,7 @@ import os
 import tempfile
 import unittest
 
-from llm_engine import _load_context_rules
+from backend.llm.llm_engine import _load_context_rules
 
 
 class ContextRulesParsingTests(unittest.TestCase):

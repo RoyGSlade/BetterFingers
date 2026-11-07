@@ -76,7 +76,7 @@
 //   speech.wake.enableToggle       Wake word enable/disable toggle                 -> enableWake()/disableWake()            [wired]
 //   speech.wake.modelSelect        Imported-classifier dropdown                    -> profile field `wake_word_model`       [wired]
 //   speech.wake.import             "Import model file..." (.onnx)                 -> importWakeModel() (typed IPC upload)  [wired]
-//   speech.wake.training           Build-a-Wake-Phrase: phrase input + train + progress + verdict -> trainWakePhrase(), fetchWakeTrainStatus() (polled) [wired]
+//   speech.wake.training           Build-a-Wake-Phrase: phrase preflight + train + progress + verdict -> preflightWakePhrase(), trainWakePhrase(), fetchWakeTrainStatus() (polled) [wired]
 //   speech.wake.tuning             sensitivity / cooldown / max-recording numbers  -> profile fields `wake_word_sensitivity`/`wake_word_cooldown_s`/`wake_word_max_recording_s` [wired]
 //   speech.wake.liveTest           "Test Wake Detection (10s)" + score meter       -> testWake()                            [wired]
 //
@@ -208,6 +208,7 @@ import {
   enableWake,
   disableWake,
   importWakeModel,
+  preflightWakePhrase,
   trainWakePhrase,
   fetchWakeTrainStatus,
   testWake,
@@ -706,6 +707,16 @@ export function formatWakeTrainVerdict(result) {
   const frr = result.false_reject_rate !== undefined ? `FR ${(Number(result.false_reject_rate) * 100).toFixed(1)}%` : '';
   const rates = [far, frr].filter(Boolean).join(' · ');
   return `${verdict}${rates ? ` (${rates})` : ''}`;
+}
+
+function formatWakePreflightRejection(report) {
+  const reasons = Array.isArray(report?.reasons)
+    ? report.reasons
+      .filter((reason) => typeof reason === 'string' && reason.trim())
+      .slice(0, 3)
+      .map((reason) => reason.trim().slice(0, 180))
+    : [];
+  return reasons.join(' ') || 'Choose a longer, more distinctive English phrase and try again.';
 }
 
 // --- Element ids -------------------------------------------------------------
@@ -1916,6 +1927,45 @@ export function createUtilitiesWorkspaceFeature({ elements, hooks } = {}) {
         return;
       }
       if (els.wakeTrainButton) els.wakeTrainButton.disabled = true;
+      if (els.wakeTrainProgress) els.wakeTrainProgress.hidden = true;
+      setMessage(els.wakeTrainResult, 'Checking whether this phrase is a good wake phrase…', 'info');
+
+      let preflight;
+      try {
+        preflight = await preflightWakePhrase(phrase);
+      } catch (error) {
+        if (els.wakeTrainProgress) els.wakeTrainProgress.hidden = true;
+        if (els.wakeTrainButton) els.wakeTrainButton.disabled = false;
+        setMessage(
+          els.wakeTrainResult,
+          `Phrase check failed: ${error.message}. Training did not start.`,
+          'danger',
+        );
+        return;
+      }
+
+      if (preflight?.verdict === 'reject') {
+        if (els.wakeTrainProgress) els.wakeTrainProgress.hidden = true;
+        if (els.wakeTrainButton) els.wakeTrainButton.disabled = false;
+        setMessage(
+          els.wakeTrainResult,
+          `Phrase rejected: ${formatWakePreflightRejection(preflight)}`,
+          'danger',
+        );
+        return;
+      }
+
+      if (preflight?.verdict !== 'good' && preflight?.verdict !== 'workable') {
+        if (els.wakeTrainProgress) els.wakeTrainProgress.hidden = true;
+        if (els.wakeTrainButton) els.wakeTrainButton.disabled = false;
+        setMessage(
+          els.wakeTrainResult,
+          'Phrase check returned no usable verdict. Training did not start.',
+          'danger',
+        );
+        return;
+      }
+
       if (els.wakeTrainProgress) els.wakeTrainProgress.hidden = false;
       setMessage(els.wakeTrainResult, '', '');
       try {

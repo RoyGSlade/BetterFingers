@@ -8,7 +8,7 @@ fail loudly. Concrete-category coverage arrives with chunk 2.1b.
 import unittest
 from pathlib import Path
 
-import data_registry as dr
+from backend.privacy import data_registry as dr
 
 
 def make_category(**overrides):

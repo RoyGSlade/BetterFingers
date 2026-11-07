@@ -18,7 +18,7 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 import server
-from llm_engine import (
+from backend.llm.llm_engine import (
     LLMEngine,
     PERSONA_OUTPUT_ONLY_RULE,
     PERSONA_SECURITY_RULE,
@@ -93,7 +93,7 @@ class GuardrailTests(unittest.TestCase):
         # Regression: lint's answer-markers used to match INSIDE the negated
         # security sentence, so every well-guarded persona linted dirty (found
         # live when the refine helper's output tripped it).
-        from llm_engine import lint_persona
+        from backend.llm.llm_engine import lint_persona
         refined = ensure_persona_guardrails("Rewrite the text to sound confident.")
         self.assertEqual(lint_persona({"prompt": refined, "safety_mode": "strict"}), [])
         # The model's own phrasing variant is negated too.

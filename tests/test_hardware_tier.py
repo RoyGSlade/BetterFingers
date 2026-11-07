@@ -1,6 +1,6 @@
 import unittest
 
-from hardware_report import classify_tier, get_hardware_tier
+from backend.models.hardware_report import classify_tier, get_hardware_tier
 
 
 class ClassifyTierTests(unittest.TestCase):

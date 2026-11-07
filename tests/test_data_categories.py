@@ -9,8 +9,8 @@ artifacts — so those get explicit assertions too.
 
 import unittest
 
-import data_categories as dc
-import data_registry as dr
+from backend.privacy import data_categories as dc
+from backend.privacy import data_registry as dr
 
 
 # Hard-coded on purpose. Update this set (and the changelog) deliberately when a

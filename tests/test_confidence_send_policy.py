@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import patch
 
 import server
-import utils
+from backend.config import utils
 
 
 class ConfidenceSendPolicyPureTests(unittest.TestCase):

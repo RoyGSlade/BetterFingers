@@ -3,7 +3,7 @@ progress, cooperative cancellation, and bounded retention."""
 
 import unittest
 
-from job_manager import JobManager, JobState, TERMINAL_STATES
+from backend.runtime.job_manager import JobManager, JobState, TERMINAL_STATES
 
 
 class _Clock:

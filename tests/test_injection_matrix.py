@@ -6,7 +6,7 @@ import os
 import tempfile
 import unittest
 
-import injection_matrix as im
+from tools.lib import injection_matrix as im
 
 
 class TargetResultTests(unittest.TestCase):

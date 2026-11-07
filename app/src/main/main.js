@@ -1,7 +1,7 @@
 const path = require('node:path');
 const fs = require('node:fs');
-const { randomUUID } = require('node:crypto');
-const { app } = require('electron');
+const { randomBytes, randomUUID } = require('node:crypto');
+const { app, session } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const {
   createMainWindow,
@@ -19,7 +19,11 @@ const backendProxy = require('./backendProxy');
 const { restoreActiveHotkeys, unregisterAllHotkeys, triggerBackendAction } = require('./hotkeys');
 const { BACKEND_HOST, BACKEND_PORT, BACKEND_ORIGIN } = require('./config');
 const { derivePhase, deriveServices, describeHardware } = require('./bootPhases');
-const { createUpdateController } = require('./updateController');
+const { createUpdateController, createUpdateCheckScheduler } = require('./updateController');
+const onboardingStore = require('./onboardingStore');
+const { purgePendingReset } = require('./rendererState');
+const { installSessionSecurity, guardNewWebContents } = require('./sessionSecurity');
+const { isTrustedRendererUrl } = require('./senderValidation');
 
 // Adopt an inherited token when the backend is managed by something else (the
 // Linux launcher starts it before us, so sidecar.js finds it already listening
@@ -30,6 +34,12 @@ const { createUpdateController } = require('./updateController');
 // ourselves, nothing is inherited and we generate one as before, which stays
 // the normal path.
 const authToken = process.env.BETTERFINGERS_AUTH_TOKEN || randomUUID();
+// The approval-signing key (Phase 0 item 1): 32 random bytes, held ONLY here and
+// by the backend we spawn (environment variable, removed by the backend as it
+// reads it). It is never sent to a renderer. Inherited when the backend is managed
+// externally and was started with one, exactly like the token above.
+const approvalKey = process.env.BETTERFINGERS_APPROVAL_KEY || randomBytes(32).toString('hex');
+delete process.env.BETTERFINGERS_APPROVAL_KEY;
 // The token lives only in the main process (Phase 3c). The renderer reaches the
 // backend exclusively through the validated proxy, which holds these.
 backendProxy.init({ origin: BACKEND_ORIGIN, token: authToken });
@@ -41,8 +51,7 @@ let shutdownMode = null;
 let runtimeStopPromise = null;
 let runtimeActivityStatus = 'idle';
 let updateController = null;
-let updateCheckTimer = null;
-let updateCheckScheduled = false;
+let updateCheckScheduler = null;
 
 // The hidden overlay window keeps Electron alive after the dashboard is
 // closed, so `mainWindow` can be destroyed (null via windows.js) while the
@@ -191,17 +200,9 @@ function broadcastUpdateState(state) {
 }
 
 function scheduleInitialUpdateCheck(win) {
-  if (updateCheckScheduled || !updateController?.isSupported?.()) return;
-  updateCheckScheduled = true;
-  const startDelay = () => {
-    if (updateCheckTimer || isQuitting) return;
-    updateCheckTimer = setTimeout(() => {
-      updateCheckTimer = null;
-      if (!isQuitting) updateController.check().catch(() => {});
-    }, 15000);
-  };
-  if (win?.webContents?.isLoading?.()) win.webContents.once('did-finish-load', startDelay);
-  else startDelay();
+  const ready = () => updateCheckScheduler?.ready();
+  if (win?.webContents?.isLoading?.()) win.webContents.once('did-finish-load', ready);
+  else ready();
 }
 
 // Runs once at cold boot, and again from the splash's Retry action
@@ -354,10 +355,27 @@ async function getAuthoritativeRuntimeActivity() {
 }
 
 function bootstrapApp() {
+  // Deny-by-default web permissions and a CSP backstop on the one session every
+  // window shares (Phase 0 items 6 and 11). Microphone capture is the single
+  // carve-out: the dashboard window's own top frame, audio only.
+  const rendererOptions = () => ({
+    rendererDir: path.resolve(__dirname, '..', 'renderer'),
+    devOrigin: process.env.ELECTRON_RENDERER_URL,
+  });
+  installSessionSecurity(session.defaultSession, {
+    getCaptureWebContents: () => {
+      const win = getMainWindow();
+      return win && !win.isDestroyed() ? win.webContents : null;
+    },
+    rendererOptions,
+  });
+  guardNewWebContents(app, { isTrustedUrl: (url) => isTrustedRendererUrl(url, rendererOptions()) });
+
   sidecar = createSidecar({
     host: BACKEND_HOST,
     port: BACKEND_PORT,
     authToken,
+    approvalKey,
     devCommand: resolveDevPythonCommand(),
     devArgs: [
       'server.py',
@@ -372,6 +390,10 @@ function bootstrapApp() {
   updateController = createUpdateController({
     app,
     updater: autoUpdater,
+    consentGuard: () => !onboardingStore.needsConsent(onboardingStore.readState()),
+    automaticUpdatesGuard: () => onboardingStore.readState().automatic_updates === true,
+    saveAutomaticUpdates: (enabled) => onboardingStore.recordAutomaticUpdates(enabled),
+    onAutomaticUpdatesChanged: () => updateCheckScheduler?.refresh(),
     // Renderer status is only a provisional UI hint. Installation always
     // rechecks the authenticated backend through this main-process guard.
     activityGuard: () => runtimeActivityStatus,
@@ -380,12 +402,14 @@ function bootstrapApp() {
     recoverFromFailedInstall: recoverFromFailedUpdateInstall,
   });
   updateController.subscribe(broadcastUpdateState);
+  updateCheckScheduler = createUpdateCheckScheduler({ controller: updateController, isQuitting: () => isQuitting });
 
   registerIpc({
     getMainWindow: () => getMainWindow(),
     getSidecarStatus: () => sidecar?.getStatus?.() ?? { state: 'unknown', message: 'Sidecar is unavailable.' },
     getSidecarLogs: () => sidecar?.getLogs?.() ?? [],
     getAuthToken: () => authToken,
+    getApprovalKey: () => approvalKey,
     getBackendOrigin: () => BACKEND_ORIGIN,
     onQuit: requestQuit,
     onShow: () => focusAppropriateWindow(),
@@ -395,6 +419,16 @@ function bootstrapApp() {
     onSplashRetry: retryBackendBoot,
     getSplashBootState: () => currentBootSnapshot(),
     updateController,
+    onConsentChanged: () => {
+      updateController.refreshConsent();
+      updateCheckScheduler.refresh();
+    },
+    // A factory reset deletes the raw sidecar log; keep main from recreating it
+    // (see sidecar.setRawLogEnabled). Back on if the reset deleted nothing.
+    onFactoryResetStart: () => sidecar?.setRawLogEnabled?.(false),
+    onFactoryResetEnd: ({ deleted } = {}) => {
+      if (!deleted) sidecar?.setRawLogEnabled?.(true);
+    },
     onRuntimeStatus: (status) => {
       runtimeActivityStatus = String(status || 'idle').toLowerCase();
       updateController?.refreshInstallEligibility?.();
@@ -434,10 +468,7 @@ function bootstrapApp() {
 function stopRuntimeServices() {
   if (runtimeStopPromise) return runtimeStopPromise;
   runtimeStopPromise = (async () => {
-    if (updateCheckTimer) {
-      clearTimeout(updateCheckTimer);
-      updateCheckTimer = null;
-    }
+    updateCheckScheduler?.cancel();
     stopBootTimers();
     bootGeneration += 1;
     try {
@@ -516,6 +547,15 @@ app.commandLine.appendSwitch('enable-features', [...chromiumFeatures].join(','))
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
+  // A factory reset leaves a marker because Chromium holds its storage files
+  // open while it runs. Finish that job now, before 'ready', while nothing has
+  // opened them (and only in the instance that owns the lock, so a second
+  // launch can never delete files out from under the first).
+  const purge = purgePendingReset({ userDataDir: app.getPath('userData') });
+  if (purge.pending) {
+    console.log(`[reset] purged ${purge.removed.length} renderer-state entr${purge.removed.length === 1 ? 'y' : 'ies'}`
+      + (purge.failed.length ? `; ${purge.failed.length} could not be removed and will be retried` : ''));
+  }
   app.whenReady().then(bootstrapApp);
 
   app.on('second-instance', () => {

@@ -13,8 +13,8 @@
 //   - BUG #1 (rename/duplicate/export profile buttons never bound) --
 //     covered structurally: SETTINGS_ELEMENT_IDS/collectSettingsElements
 //     include real ids for all three, unlike main.js's bare identifiers.
-//   - draft_history_limit not collected/restored -- covered by the
-//     collect/restore round-trip test asserting it survives the cycle.
+//   - BF-G5 removes ineffective settings writers while preserving legacy
+//     profile values in the save/import/export payloads.
 //
 // Run with: node --test app/tests/settingsWorkspace.test.mjs
 import { test } from 'node:test';
@@ -184,10 +184,18 @@ test('validateProfileName: accepts a well-formed, non-reserved name', () => {
   assert.equal(validateProfileName('Work-Profile_2'), null);
 });
 
+const REMOVED_KEYS = ['draft_history_limit', 'whisper_chunk_size', 'status_indicator_enabled', 'notification_overlay_enabled', 'preview_overlay_enabled'];
+
 // --- range validation --------------------------------------------------------
 
-test('SETTINGS_VALIDATION_RULES: includes draft_history_limit at 10-500 (the wiring-fix field)', () => {
-  assert.deepEqual(SETTINGS_VALIDATION_RULES.draft_history_limit, { min: 10, max: 500, parse: 'int', message: SETTINGS_VALIDATION_RULES.draft_history_limit.message });
+test('removed ineffective fields have no validator or renderer mapping', () => {
+  for (const key of REMOVED_KEYS) {
+    assert.equal(SETTINGS_VALIDATION_RULES[key], undefined);
+    assert.equal(SETTINGS_FIELD_TYPES[key], undefined);
+    assert.equal(SETTINGS_ELEMENT_IDS.fields[key], undefined);
+    assert.equal(SETTINGS_ELEMENT_IDS.fieldErrors[key], undefined);
+    assert.equal(SETTINGS_FIELD_KEYS.includes(key), false);
+  }
 });
 
 test('validateFieldValue: max_completion_tokens rejects out-of-range and accepts in-range', () => {
@@ -226,7 +234,6 @@ test('runSettingsValidation: all-valid input produces no errors', () => {
     max_completion_tokens: '1024',
     long_draft_warning_words: '1200',
     llm_chunk_size: '800',
-    whisper_chunk_size: '800',
     confidence_force_review_below: '0.6',
     confidence_auto_send_above: '0.9',
     auto_stop_silence_ms: '1200',
@@ -234,7 +241,6 @@ test('runSettingsValidation: all-valid input produces no errors', () => {
     no_audio_min_duration_sec: '0.3',
     no_audio_min_rms: '0.01',
     no_audio_min_peak: '0.05',
-    draft_history_limit: '100',
   };
   const { errors, hasErrors } = runSettingsValidation(values);
   assert.deepEqual(errors, {});
@@ -242,9 +248,9 @@ test('runSettingsValidation: all-valid input produces no errors', () => {
 });
 
 test('runSettingsValidation: multiple simultaneous errors are all reported', () => {
-  const { errors, hasErrors } = runSettingsValidation({ draft_history_limit: '5', llm_chunk_size: '1' });
+  const { errors, hasErrors } = runSettingsValidation({ max_completion_tokens: '5', llm_chunk_size: '1' });
   assert.equal(hasErrors, true);
-  assert.match(errors.draft_history_limit, /10 and 500/);
+  assert.match(errors.max_completion_tokens, /512 and 4096/);
   assert.match(errors.llm_chunk_size, /50 and 5000/);
 });
 
@@ -252,11 +258,6 @@ test('runSettingsValidation: multiple simultaneous errors are all reported', () 
 
 test('SETTINGS_FIELD_KEYS and SETTINGS_FIELD_TYPES stay in sync (every key has a type, no extras)', () => {
   assert.deepEqual([...SETTINGS_FIELD_KEYS].sort(), Object.keys(SETTINGS_FIELD_TYPES).sort());
-});
-
-test('SETTINGS_FIELD_KEYS: includes draft_history_limit (the wiring-fix field) exactly once', () => {
-  const occurrences = SETTINGS_FIELD_KEYS.filter((k) => k === 'draft_history_limit');
-  assert.equal(occurrences.length, 1);
 });
 
 test('AI cleanup is a Settings-owned opt-in checkbox', () => {
@@ -319,13 +320,14 @@ test('restoreFieldStatesFromSettings: an explicit stored value always wins over 
 
 test('restoreFieldStatesFromSettings: non-checkbox fields fall back to empty string when unset', () => {
   const states = restoreFieldStatesFromSettings({});
-  assert.equal(states.draft_history_limit.value, '');
   assert.equal(states.max_completion_tokens.value, '');
 });
 
-test('restoreFieldStatesFromSettings: draft_history_limit round-trips a real stored value (the wiring-fix field)', () => {
-  const states = restoreFieldStatesFromSettings({ draft_history_limit: 250 });
-  assert.equal(states.draft_history_limit.value, 250);
+test('removed legacy values are not restored into editable field states', () => {
+  const stored = Object.fromEntries(REMOVED_KEYS.map((key) => [key, 250]));
+  const states = restoreFieldStatesFromSettings(stored);
+  for (const key of REMOVED_KEYS) assert.equal(states[key], undefined);
+  assert.deepEqual(collectPatchFromFieldStates(stored), {});
 });
 
 test('collect/restore ROUND TRIP: a full settings object survives restore -> (simulated DOM) -> collect unchanged', () => {
@@ -346,16 +348,11 @@ test('collect/restore ROUND TRIP: a full settings object survives restore -> (si
     auto_submit: true,
     instant_typing: true,
     restore_clipboard_after_paste: false,
-    draft_history_limit: 250,
     current_preset: 'Direct',
     max_completion_tokens: 2048,
     long_draft_warning_words: 900,
     llm_chunk_size: 700,
-    whisper_chunk_size: 600,
     long_recording_stitch_pass_enabled: true,
-    status_indicator_enabled: false,
-    notification_overlay_enabled: false,
-    preview_overlay_enabled: false,
     // D-0005 disclosed toggle. Included with a non-default value on purpose:
     // a user who turns delivery signals on must find them still on after a
     // profile round trip, or the control is decorative.
@@ -392,7 +389,7 @@ test('collect/restore ROUND TRIP: an empty profile restores documented defaults,
   assert.equal(collected.auto_submit, false);
   // Empty numeric fields collect as NaN (Number('')===0 actually -- verify
   // the real coercion behavior explicitly rather than assume).
-  assert.equal(collected.draft_history_limit, 0);
+  assert.equal(collected.max_completion_tokens, 0);
 });
 
 test('mergeProfilePatch: patch keys win over base, base keys not in patch are preserved', () => {
@@ -456,7 +453,7 @@ test('collectSettingsElements: missing ids resolve to null, never throw (no real
   const fakeDoc = { getElementById: () => null };
   const els = collectSettingsElements(fakeDoc);
   assert.equal(els.profileSelect, null);
-  assert.equal(els.fields.draft_history_limit, null);
+  assert.equal(els.fields.max_completion_tokens, null);
   assert.equal(els.fieldErrors.max_completion_tokens, null);
 });
 
@@ -492,14 +489,14 @@ test('createSettingsWorkspaceFeature: renderSettings()/collectSettings() round-t
   const feature = createSettingsWorkspaceFeature({ elements: { fields }, hooks: {} });
   feature.init();
   feature.renderSettings({ draft_history_limit: 150, max_completion_tokens: 2048, voice_commands_enabled: false });
-  assert.equal(fields.draft_history_limit.value, 150);
+  assert.equal(fields.draft_history_limit, undefined);
   assert.equal(fields.max_completion_tokens.value, 2048);
   assert.equal(fields.voice_commands_enabled.checked, false);
   // restore_clipboard_after_paste wasn't in the input -> default-on fallback applies.
   assert.equal(fields.restore_clipboard_after_paste.checked, true);
 
   const collected = feature.collectSettings();
-  assert.equal(collected.draft_history_limit, 150);
+  assert.equal(collected.draft_history_limit, 150, 'legacy saved value remains untouched');
   assert.equal(collected.max_completion_tokens, 2048);
   assert.equal(collected.voice_commands_enabled, false);
   assert.equal(collected.restore_clipboard_after_paste, true);
@@ -644,7 +641,7 @@ test('renderSettings() reflects a persisted auto_submit=true without re-promptin
 
 // Exactly the inventory areas the work packet calls out by name for
 // Settings: sticky Save/Discard bar + profile management (including the
-// BUG #1 buttons), Recording, Review & Drafts (including draft_history_limit),
+// BUG #1 buttons), Recording, Review & Drafts,
 // AI Cleanup numeric knobs, Notifications, Appearance (incl. Floating
 // Overlay), and Privacy (incl. the wipe flow).
 const REQUIRED_INVENTORY_KEYS = [
@@ -671,18 +668,13 @@ const REQUIRED_INVENTORY_KEYS = [
   'review.autoSubmit',
   'review.instantTyping',
   'review.restoreClipboard',
-  'review.draftHistoryLimit',
   // AI Cleanup (§7.5 numeric knobs)
   'aicleanup.currentPreset',
   'aicleanup.maxCompletionTokens',
   'aicleanup.longDraftWarningWords',
   'aicleanup.llmChunkSize',
-  'aicleanup.whisperChunkSize',
   'aicleanup.stitchPass',
   // Notifications & Status (§7.10)
-  'notifications.statusIndicator',
-  'notifications.notificationOverlay',
-  'notifications.previewOverlay',
   // Appearance (§7.11)
   'appearance.themeGroup',
   'appearance.overlayGroup',
@@ -968,7 +960,7 @@ test('with no inspect hook the link still goes somewhere real', () => {
 test('update view models cover every updater state with honest actions', () => {
   const cases = [
     ['unsupported', null, '', true],
-    ['idle', 'check', 'Check again', false],
+    ['idle', 'check', 'Check for updates', false],
     ['checking', 'check', 'Checking…', false],
     ['up_to_date', 'check', 'Check again', false],
     ['available', 'download', 'Download update', false],
@@ -1060,18 +1052,20 @@ function updateElement() {
 }
 
 function updateCardHarness(initialState) {
+  initialState = { consentGranted: true, ...initialState };
   const elements = { fields: {}, fieldErrors: {}, disclosedToggles: {} };
   for (const key of [
     'updateCard', 'updateCurrentVersion', 'updateChannel', 'updateStatus', 'updateDetail',
     'updateRelease', 'updateReleaseMeta', 'updateReleaseNotes', 'updateProgress',
     'updateProgressText', 'updatePrimaryButton', 'updateLaterButton', 'updateResumeButton',
-    'updateManualLink',
+    'updateManualLink', 'updateAutomatic', 'updatePreferenceMessage',
   ]) elements[key] = updateElement();
   const calls = [];
   let pushed = null;
   let unsubscribed = false;
   const updatesApi = {
     getState: async () => initialState,
+    setAutomatic: async (enabled) => { calls.push(['automatic', enabled]); return { ...initialState, automaticUpdates: enabled }; },
     check: async () => { calls.push('check'); return { ...initialState, status: 'checking' }; },
     download: async () => { calls.push('download'); return { ...initialState, status: 'downloading' }; },
     install: async () => { calls.push('install'); return { ...initialState, status: 'installing' }; },
@@ -1126,4 +1120,41 @@ test('malformed update payloads normalize to unsupported finite state', () => {
   assert.equal(state.status, 'unsupported');
   assert.equal(state.percent, 0);
   assert.equal(state.bytesTotal, 0);
+});
+
+
+test('update card exposes durable opt-in and waits for main confirmation', async () => {
+  const h = updateCardHarness({ status: 'idle', automaticUpdates: false });
+  await h.feature.refreshUpdateState();
+  assert.equal(h.elements.updateAutomatic.checked, false);
+  assert.equal(h.elements.updateAutomatic.disabled, false);
+  assert.equal(h.elements.updatePrimaryButton.textContent, 'Check for updates');
+  h.elements.updateAutomatic.checked = true;
+  h.elements.updateAutomatic.fire('change');
+  await Promise.resolve();
+  assert.deepEqual(h.calls, [['automatic', true]]);
+  assert.equal(h.elements.updateAutomatic.checked, true);
+  h.elements.updatePrimaryButton.fire('click'); await Promise.resolve();
+  assert.deepEqual(h.calls, [['automatic', true], 'check']);
+  h.feature.destroy();
+});
+
+test('update card blocks actions before consent and keeps GitHub purpose visible in source', async () => {
+  const h = updateCardHarness({ status: 'idle', consentGranted: false });
+  await h.feature.refreshUpdateState();
+  assert.equal(h.elements.updateAutomatic.disabled, true);
+  assert.equal(h.elements.updatePrimaryButton.disabled, true);
+  h.elements.updatePrimaryButton.fire('click');
+  assert.deepEqual(h.calls, []);
+  h.feature.destroy();
+});
+
+test('supported field edits preserve all removed and unknown profile data', () => {
+  const legacy = { draft_history_limit: 42, whisper_chunk_size: 875, status_indicator_enabled: false, notification_overlay_enabled: false, preview_overlay_enabled: true, future_key: { nested: 'keep' } };
+  const feature = createSettingsWorkspaceFeature({ elements: { fields: { recording_mode: { value: '', addEventListener() {} } } }, hooks: {} });
+  feature.init();
+  feature.renderSettings({ ...legacy, recording_mode: 'toggle' });
+  assert.deepEqual(feature.collectSettings(), { ...legacy, recording_mode: 'toggle' });
+  const imported = buildLegacyProfileImportPayload({ name: 'Old', settings: legacy });
+  assert.deepEqual(imported.settings, legacy);
 });

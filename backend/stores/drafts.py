@@ -19,6 +19,7 @@ import logging
 import os
 import threading
 from datetime import datetime, timezone
+from backend.stores.draft_artifacts import snapshot_lock, remove_draft_from_snapshots
 
 
 class DraftStore:
@@ -52,7 +53,7 @@ class DraftStore:
         # guaranteed to be at least as new as, so skips never drop an update
         # -- at worst an extra (correct) write happens.
         self._persist_lock = threading.Lock()   # guards the counters + pending mirror set
-        self._write_lock = threading.Lock()      # serializes the write-to-disk step
+        self._write_lock = snapshot_lock         # serializes snapshot writes and deletes
         self._request_rev = 0                     # bumped once per save_history call
         self._written_rev = 0                     # highest revision flushed to disk
         self._pending_full_mirror = False          # a full-queue mirror was requested
@@ -358,7 +359,8 @@ class DraftStore:
         Idempotent: returns False (not an error) when draft_id is already
         absent, same as history_store.delete_draft.
         """
-        with self.lock:
+        with self._write_lock, self.lock:
+            remove_draft_from_snapshots(self._history_file(), draft_id)
             idx = next((i for i, d in enumerate(self.draft_queue) if d["id"] == draft_id), None)
             if idx is None:
                 return False

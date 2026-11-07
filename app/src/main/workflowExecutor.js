@@ -18,11 +18,13 @@
 // THE ORDER, and every line of it is load-bearing:
 //
 //   1. shape-check the id                (a path segment, not a path)
-//   2. build the context from the CONFIRMED registry, read here in main
-//   3. POST /workflows/run                (re-validate, re-preview, can_run)
-//   4. refuse unless ok                   -- no step runs on a bad verdict
-//   5. perform each step, in order, collecting a STATUS CODE per step
-//   6. POST /workflows/run/record         (codes only; the history holds no paths)
+//   2. consume the run authorization      (single use; none, expired or another id: refuse)
+//   3. build the context from the CONFIRMED registry, read here in main
+//   4. POST /workflows/run                (re-validate, re-preview, can_run)
+//   5. refuse unless ok AND the plan equals the confirmed one -- no step runs otherwise
+//   6. perform each FROZEN step against its FROZEN target, in order, collecting a STATUS
+//      CODE per step; a changed application stops the run
+//   7. POST /workflows/run/record         (codes only; the history holds no paths)
 //
 // Step 3 is not a formality. A workflow can become unrunnable without anybody
 // editing it -- the user removes the application it launches, or re-confirms it
@@ -36,12 +38,24 @@
 // visible happened yet" case, which is a second or more later and would
 // otherwise launch the game twice.
 //
+// EVERY RUN IS AUTHORIZED, AND THE TARGETS ARE FROZEN (round 3, items 1 and 2). `execute` takes
+// the id and a run authorization minted by approvalBroker.confirmWorkflowRun after the person
+// clicked in a native dialog (runAuthorization.js). Without one, nothing is asked of the backend
+// and nothing runs. The authorization is consumed first; the gate's plan must equal the plan that
+// was shown (preview digest and canonical steps); the steps that run are the FROZEN copies; every
+// application step uses the registry entry frozen at confirm time and is refused, stopping the
+// run, when the live registry entry no longer equals it. A target swapped during a wait never
+// runs, and neither does the original once its entry has changed.
+//
 // WHAT IS NOT WIRED, honestly. `activate_persona` and `activate_writing_preset`
 // have no activation route on the backend today -- selecting either is a
 // settings write the dashboard performs, not an endpoint. They are dispatched
 // through `applySetting`, which defaults to reporting `unavailable`, so a
 // workflow containing one reports "did 2 of 3" rather than claiming success.
 // The integration diff records this as the one open item.
+
+const { linesDigest } = require('./approvalBroker');
+const { canonicalJson } = require('./runAuthorization');
 
 const DEFAULT_TIMEOUT_MS = 8000;
 
@@ -80,6 +94,7 @@ function isPlainObject(value) {
  * @param {function} [deps.notify]              (message) => void
  * @param {function} [deps.applySetting]        (action, value) => status code
  * @param {function} [deps.wait]                (ms) => Promise
+ * @param {object} deps.authorizations          runAuthorization.createRunAuthorizations() result
  */
 function createWorkflowExecutor({
   backendProxy,
@@ -88,6 +103,7 @@ function createWorkflowExecutor({
   notify = null,
   applySetting = null,
   wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  authorizations = null,
 } = {}) {
   // workflow id -> the in-flight promise. Not a boolean: a second press should
   // receive the SAME answer the first one is waiting for, not a bare "busy"
@@ -109,26 +125,38 @@ function createWorkflowExecutor({
     return { ok: true, status: response.status, body: response.body };
   }
 
+  // The frozen target of an application step, if the live registry still holds exactly it.
+  // null means "changed or gone since the person confirmed": the step is refused and the run stops.
+  function unchangedEntry(target, step) {
+    if (!target || !target.entry || target.app_id !== String(step.app_id || '')) return null;
+    const live = registryEntry(target.app_id);
+    if (!live || canonicalJson(live) !== canonicalJson(target.entry)) return null;
+    return target.entry;
+  }
+
   /** One step -> one status code. Never a message, never a path. */
-  async function performStep(step) {
+  async function performStep(step, target) {
     const action = String((step && step.action) || '');
+    if (target && target.action !== action) return { status: STATUS_REFUSED, stop: true };
     switch (action) {
       case 'launch_app': {
-        const entry = registryEntry(step.app_id);
-        // The registry is the only thing a workflow may name, and a step whose
-        // application is no longer confirmed is refused rather than guessed at.
-        if (!entry) return STATUS_NOT_FOUND;
+        // The registry is the only thing a workflow may name; the entry used is the one FROZEN
+        // when the person confirmed, and only while the live entry still equals it.
+        const entry = unchangedEntry(target, step);
+        if (!entry) return { status: STATUS_REFUSED, stop: true };
         return launcher.launch(entry).status;
       }
       case 'focus_app': {
-        const entry = registryEntry(step.app_id);
-        if (!entry) return STATUS_NOT_FOUND;
+        const entry = unchangedEntry(target, step);
+        if (!entry) return { status: STATUS_REFUSED, stop: true };
         return launcher.focus(entry).status;
       }
       case 'open_uri':
-        return launcher.open(String(step.uri || '')).status;
-      case 'open_folder':
-        return launcher.open(String(step.path || '')).status;
+      case 'open_folder': {
+        const wanted = String((action === 'open_uri' ? step.uri : step.path) || '');
+        if (!target || typeof target.target !== 'string' || target.target !== wanted) return { status: STATUS_REFUSED, stop: true };
+        return launcher.open(target.target).status;
+      }
       case 'wait_for_process': {
         const requested = Number(step.timeout_ms);
         const ms = Number.isFinite(requested) && requested > 0
@@ -173,7 +201,7 @@ function createWorkflowExecutor({
     }
   }
 
-  async function runApproved(workflowId) {
+  async function runApproved(workflowId, grant) {
     const gate = await post('/workflows/run', {
       workflow_id: workflowId,
       context: { registry: listApplications() || [] },
@@ -202,18 +230,37 @@ function createWorkflowExecutor({
     }
 
     const workflow = isPlainObject(gate.body.workflow) ? gate.body.workflow : {};
-    const steps = Array.isArray(workflow.steps) ? workflow.steps : [];
+    const gateLines = Array.isArray(gate.body.preview_lines) ? gate.body.preview_lines.map(String) : null;
+    // The gate must describe exactly the plan the person confirmed. Anything else -- an edit, a
+    // re-approval, a registry change that alters the preview -- is a different run, refused.
+    if (!gateLines || linesDigest(gateLines) !== grant.previewSha256
+        || !Array.isArray(workflow.steps) || canonicalJson(workflow.steps) !== grant.stepsCanonical) {
+      return { ok: false, error: 'plan_changed',
+        reason: 'That workflow changed after you confirmed it, so nothing ran. Run it again to see the new steps.' };
+    }
+    const steps = grant.steps;
 
     // Sequential, deliberately. These steps have an order the user read in the
     // preview -- "launch the game, then switch the profile" -- and running them
     // concurrently would make the preview a lie about what happens when.
     const results = [];
+    let stopped = false;
     for (let index = 0; index < steps.length; index += 1) {
       let status;
-      try {
-        status = await performStep(steps[index]);
-      } catch {
-        status = STATUS_FAILED;
+      if (stopped) {
+        status = STATUS_SKIPPED;
+      } else {
+        try {
+          const outcome = await performStep(steps[index], grant.targets[index]);
+          if (outcome && typeof outcome === 'object') {
+            status = outcome.status;
+            stopped = Boolean(outcome.stop);
+          } else {
+            status = outcome;
+          }
+        } catch {
+          status = STATUS_FAILED;
+        }
       }
       results.push({ index, action: String(steps[index].action || ''), status });
     }
@@ -226,7 +273,8 @@ function createWorkflowExecutor({
     const summary = record.ok && isPlainObject(record.body) ? record.body.summary : null;
 
     return {
-      ok: Boolean(summary && summary.ok),
+      ok: Boolean(summary && summary.ok) && !stopped,
+      ...(stopped ? { error: 'target_changed', reason: 'An application changed after you confirmed this run, so BetterFingers stopped before starting it.' } : {}),
       workflow_id: workflowId,
       preview_lines: gate.body.preview_lines || [],
       results,
@@ -235,19 +283,28 @@ function createWorkflowExecutor({
   }
 
   /**
-   * The one entry point. Takes a workflow id and nothing else.
+   * The one entry point. Takes a workflow id and the run authorization main minted after the
+   * person's click, and nothing else: the steps and targets come from the authorization.
    */
-  async function execute(workflowId) {
+  async function execute(workflowId, { authorization } = {}) {
     const id = String(workflowId || '').trim();
     if (!WORKFLOW_ID.test(id)) {
       return { ok: false, error: 'invalid_id',
         reason: 'That is not a workflow BetterFingers knows about.' };
     }
+    // Consumed before anything else, so a token is good for exactly one attempt.
+    const grant = authorizations && typeof authorizations.consume === 'function'
+      ? authorizations.consume(authorization, id)
+      : null;
+    if (!grant) {
+      return { ok: false, error: 'not_confirmed',
+        reason: 'That run was not confirmed in the BetterFingers window, so nothing ran.' };
+    }
 
     const existing = inFlight.get(id);
     if (existing) return existing;
 
-    const promise = runApproved(id).finally(() => inFlight.delete(id));
+    const promise = runApproved(id, grant).finally(() => inFlight.delete(id));
     inFlight.set(id, promise);
     return promise;
   }

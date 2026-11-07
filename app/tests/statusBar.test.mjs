@@ -7,6 +7,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 import {
   UNKNOWN,
@@ -24,6 +25,16 @@ import {
   appProfileLabel,
   createStatusBarFeature,
 } from '../src/renderer/features/statusBar.js';
+
+const signalDeskMarkup = readFileSync(new URL('../src/renderer/signal-desk.html', import.meta.url), 'utf8');
+
+test('status details routes to Runtime Diagnostics through the shell and utility routers', () => {
+  const button = signalDeskMarkup.match(/<button[^>]*class="sd-statusbar__overflow-btn"[^>]*>/)?.[0];
+  assert.ok(button, 'expected the status-details button');
+  assert.match(button, /data-shell-nav="utilities"/);
+  assert.match(button, /data-util-nav="diagnostics"/);
+  assert.match(button, /aria-label="More status details"/);
+});
 
 // --- mic ---------------------------------------------------------------------
 

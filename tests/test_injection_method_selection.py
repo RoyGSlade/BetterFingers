@@ -3,8 +3,8 @@ import os
 import unittest
 from unittest.mock import patch
 
-import platform_capabilities
-from injector import InputInjector
+from backend.platform import platform_capabilities
+from backend.output.injector import InputInjector
 
 
 def _which_map(available):
@@ -26,7 +26,7 @@ class DetectInjectionMethodTests(unittest.TestCase):
         ), patch.object(
             platform_capabilities, "supports_basic_clipboard", True
         ), patch(
-            "platform_capabilities.shutil.which", _which_map(tools)
+            "backend.platform.platform_capabilities.shutil.which", _which_map(tools)
         ), patch.dict(
             os.environ,
             {"DISPLAY": ":99" if x11 else "", "WAYLAND_DISPLAY": "wayland-0" if wayland else ""},
@@ -67,7 +67,7 @@ class DetectInjectionMethodTests(unittest.TestCase):
         ), patch.object(platform_capabilities, "is_wayland", True), patch.object(
             platform_capabilities, "is_x11", False
         ), patch.object(platform_capabilities, "supports_basic_clipboard", True), patch(
-            "platform_capabilities.shutil.which", _which_map(["wtype"])
+            "backend.platform.platform_capabilities.shutil.which", _which_map(["wtype"])
         ), patch.dict(os.environ, {"WAYLAND_DISPLAY": "", "DISPLAY": ""}, clear=False):
             self.assertEqual(platform_capabilities.detect_injection_method(), "none")
 
@@ -77,7 +77,7 @@ class DetectInjectionMethodTests(unittest.TestCase):
         ), patch.object(platform_capabilities, "is_wayland", False), patch.object(
             platform_capabilities, "is_x11", True
         ), patch.object(platform_capabilities, "supports_basic_clipboard", True), patch(
-            "platform_capabilities.shutil.which", _which_map(["xdotool"])
+            "backend.platform.platform_capabilities.shutil.which", _which_map(["xdotool"])
         ), patch.dict(os.environ, {"WAYLAND_DISPLAY": "", "DISPLAY": ""}, clear=False):
             self.assertEqual(platform_capabilities.detect_injection_method(), "none")
 
@@ -87,7 +87,7 @@ class DetectInjectionMethodTests(unittest.TestCase):
         ), patch.object(
             platform_capabilities, "supports_basic_clipboard", False
         ), patch(
-            "platform_capabilities.shutil.which", _which_map([])
+            "backend.platform.platform_capabilities.shutil.which", _which_map([])
         ):
             self.assertEqual(platform_capabilities.detect_injection_method(), "none")
 
@@ -101,7 +101,7 @@ class ClipboardBackendDetectionTests(unittest.TestCase):
             platform_capabilities, "is_macos", macos
         ), patch.object(platform_capabilities, "is_linux", linux), patch.object(
             platform_capabilities, "is_wayland", wayland
-        ), patch("platform_capabilities.shutil.which", _which_map(tools)), patch.dict(
+        ), patch("backend.platform.platform_capabilities.shutil.which", _which_map(tools)), patch.dict(
             os.environ,
             {"DISPLAY": "" if wayland else ":99", "WAYLAND_DISPLAY": "wayland-0" if wayland else ""},
             clear=False,
@@ -204,7 +204,7 @@ class CapabilitiesFieldTests(unittest.TestCase):
             platform_capabilities, "is_macos", False
         ), patch.object(platform_capabilities, "is_linux", True), patch.object(
             platform_capabilities, "is_wayland", True
-        ), patch("platform_capabilities.shutil.which", _which_map(["xclip"])), patch.dict(
+        ), patch("backend.platform.platform_capabilities.shutil.which", _which_map(["xclip"])), patch.dict(
             os.environ, {"WAYLAND_DISPLAY": "wayland-0", "DISPLAY": ""}, clear=False
         ):
             self.assertEqual(platform_capabilities._detect_clipboard_backend(), "")
@@ -213,7 +213,7 @@ class CapabilitiesFieldTests(unittest.TestCase):
             platform_capabilities, "is_macos", False
         ), patch.object(platform_capabilities, "is_linux", True), patch.object(
             platform_capabilities, "is_wayland", True
-        ), patch("platform_capabilities.shutil.which", _which_map(["xclip"])), patch.dict(
+        ), patch("backend.platform.platform_capabilities.shutil.which", _which_map(["xclip"])), patch.dict(
             os.environ, {"WAYLAND_DISPLAY": "wayland-0", "DISPLAY": ":99"}, clear=False
         ):
             self.assertEqual(platform_capabilities._detect_clipboard_backend(), "xclip")
@@ -285,7 +285,7 @@ class InjectionStatusTests(unittest.TestCase):
             platform_capabilities, "is_wayland", wayland
         ), patch.object(platform_capabilities, "is_x11", x11), patch.object(
             platform_capabilities, "session_type", session
-        ), patch("platform_capabilities.shutil.which", _which_map(tools)), patch.dict(
+        ), patch("backend.platform.platform_capabilities.shutil.which", _which_map(tools)), patch.dict(
             os.environ,
             {"DISPLAY": ":99" if x11 else "", "WAYLAND_DISPLAY": "wayland-0" if wayland else ""},
             clear=False,
@@ -355,12 +355,12 @@ class InjectionStatusTests(unittest.TestCase):
 
 
 class TypeTextRoutingTests(unittest.TestCase):
-    @patch("injector.load_profile", return_value={})
+    @patch("backend.output.injector.load_profile", return_value={})
     def test_type_text_uses_external_tool_on_linux(self, _load_profile):
-        with patch("injector.IS_WINDOWS", False):
+        with patch("backend.output.injector.IS_WINDOWS", False):
             inj = InputInjector(profile_name="Default")
             inj.injection_method = "xdotool"
-            with patch("injector._run_type_tool", return_value=True) as run_tool, patch.object(
+            with patch("backend.output.injector._run_type_tool", return_value=True) as run_tool, patch.object(
                 inj, "_paste_raw"
             ) as paste_raw:
                 inj.type_text("hello")
@@ -371,23 +371,23 @@ class TypeTextRoutingTests(unittest.TestCase):
                 self.assertEqual(args[1], "hello")
                 paste_raw.assert_not_called()
 
-    @patch("injector.load_profile", return_value={})
+    @patch("backend.output.injector.load_profile", return_value={})
     def test_type_text_falls_back_to_paste_when_tool_fails(self, _load_profile):
-        with patch("injector.IS_WINDOWS", False):
+        with patch("backend.output.injector.IS_WINDOWS", False):
             inj = InputInjector(profile_name="Default")
             inj.injection_method = "wtype"
-            with patch("injector._run_type_tool", return_value=False), patch.object(
+            with patch("backend.output.injector._run_type_tool", return_value=False), patch.object(
                 inj, "_paste_raw"
             ) as paste_raw:
                 inj.type_text("hello")
                 paste_raw.assert_called_once_with("hello")
 
-    @patch("injector.load_profile", return_value={})
+    @patch("backend.output.injector.load_profile", return_value={})
     def test_type_text_uses_paste_when_method_is_paste(self, _load_profile):
-        with patch("injector.IS_WINDOWS", False):
+        with patch("backend.output.injector.IS_WINDOWS", False):
             inj = InputInjector(profile_name="Default")
             inj.injection_method = "paste"
-            with patch("injector._run_type_tool") as run_tool, patch.object(
+            with patch("backend.output.injector._run_type_tool") as run_tool, patch.object(
                 inj, "_paste_raw"
             ) as paste_raw:
                 inj.type_text("hi")

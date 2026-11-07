@@ -17,11 +17,28 @@ module.exports = defineConfig({
           hotkeys: resolve(__dirname, 'src/main/hotkeys.js'),
           senderValidation: resolve(__dirname, 'src/main/senderValidation.js'),
           backendProxy: resolve(__dirname, 'src/main/backendProxy.js'),
+          bugReportController: resolve(__dirname, 'src/main/bugReportController.js'),
           userDataRoot: resolve(__dirname, 'src/main/userDataRoot.js'),
           onboardingStore: resolve(__dirname, 'src/main/onboardingStore.js'),
+          // Chromium-owned renderer state: the factory reset's live clear and
+          // the next-launch purge (main.js and ipc.js both require it).
+          rendererState: resolve(__dirname, 'src/main/rendererState.js'),
           // OR-02 startup splash phase derivation (main.js requires it for
           // pushBootSnapshot()).
           bootPhases: resolve(__dirname, 'src/main/bootPhases.js'),
+          // Which keys may be the send shortcut, and who may change it; ipc.js requires it.
+          sendHotkeyPolicy: resolve(__dirname, 'src/main/sendHotkeyPolicy.js'),
+          // The approval broker (native dialog + signed approvals); ipc.js requires it.
+          approvalBroker: resolve(__dirname, 'src/main/approvalBroker.js'),
+          // Credential masking for backend log lines (sidecar.js requires it).
+          redact: resolve(__dirname, 'src/main/redact.js'),
+          // shell:open-path file-type policy; ipc.js requires it.
+          openPathPolicy: resolve(__dirname, 'src/main/openPathPolicy.js'),
+          // Which page may call which IPC channel; ipc.js requires it.
+          ipcPolicy: resolve(__dirname, 'src/main/ipcPolicy.js'),
+          // Session-level hardening (permission handlers, CSP backstop);
+          // main.js requires it.
+          sessionSecurity: resolve(__dirname, 'src/main/sessionSecurity.js'),
           // Wave 9 restricted actions. Listed here for the Wave 1 lesson: a
           // main-process module that is required at runtime but missing from
           // these inputs is not a build error -- it is a silent no-window
@@ -31,6 +48,8 @@ module.exports = defineConfig({
           applicationLauncher: resolve(__dirname, 'src/main/applicationLauncher.js'),
           // Wave 10 / D-0027: the run executor, the only caller of the launcher.
           workflowExecutor: resolve(__dirname, 'src/main/workflowExecutor.js'),
+          // Round 3: single-use run authorizations (broker issues, executor consumes).
+          runAuthorization: resolve(__dirname, 'src/main/runAuthorization.js'),
         },
       },
     },
@@ -40,7 +59,13 @@ module.exports = defineConfig({
     build: {
       rollupOptions: {
         input: {
+          // The dashboard's bridge, and one MINIMAL preload per other window
+          // (Phase 0 item 7). Each is self-contained: a sandboxed preload cannot
+          // require a shared local module, and a shared chunk would not load.
           preload: resolve(__dirname, 'src/preload/preload.js'),
+          'preload-overlay': resolve(__dirname, 'src/preload/preload-overlay.js'),
+          'preload-review': resolve(__dirname, 'src/preload/preload-review.js'),
+          'preload-splash': resolve(__dirname, 'src/preload/preload-splash.js'),
         },
       },
     },

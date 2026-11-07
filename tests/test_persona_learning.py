@@ -13,7 +13,7 @@ from backend.services.persona_learning import (
     PersonaLearningStore,
     _compute_id,
 )
-from store_migration import write_atomic
+from backend.config.store_migration import write_atomic
 
 
 @pytest.fixture

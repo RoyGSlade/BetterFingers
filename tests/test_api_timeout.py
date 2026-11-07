@@ -8,7 +8,7 @@ cleanups complete.
 
 import unittest
 
-import llm_engine as le
+from backend.llm import llm_engine as le
 
 
 class ComputeApiReadTimeoutTests(unittest.TestCase):

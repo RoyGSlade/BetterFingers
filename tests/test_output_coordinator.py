@@ -3,7 +3,7 @@ import time
 
 import pytest
 
-from output_coordinator import OutputCoordinator
+from backend.runtime.output_coordinator import OutputCoordinator
 
 
 def test_begin_end_roundtrip():

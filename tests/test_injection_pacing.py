@@ -4,7 +4,7 @@ import subprocess
 import unittest
 from unittest.mock import patch
 
-import injection_pacing as ip
+from backend.output import injection_pacing as ip
 
 
 class NormalizeAppTests(unittest.TestCase):
@@ -84,28 +84,28 @@ class DetectActiveAppTests(unittest.TestCase):
         return fake_run
 
     def test_x11_detects_and_normalizes_class(self):
-        with patch("injection_pacing.os.environ", {"DISPLAY": ":0"}), \
-             patch("injection_pacing.shutil.which", return_value="/usr/bin/xdotool"), \
-             patch("injection_pacing.subprocess.run", side_effect=self._run(stdout=b"soffice.bin\n")), \
-             patch("platform_capabilities.IS_WINDOWS", False):
+        with patch("backend.output.injection_pacing.os.environ", {"DISPLAY": ":0"}), \
+             patch("backend.output.injection_pacing.shutil.which", return_value="/usr/bin/xdotool"), \
+             patch("backend.output.injection_pacing.subprocess.run", side_effect=self._run(stdout=b"soffice.bin\n")), \
+             patch("backend.platform.platform_capabilities.IS_WINDOWS", False):
             self.assertEqual(ip.detect_active_app_key(), "libreoffice")
 
     def test_x11_no_display_returns_empty(self):
-        with patch("injection_pacing.os.environ", {}), \
-             patch("platform_capabilities.IS_WINDOWS", False):
+        with patch("backend.output.injection_pacing.os.environ", {}), \
+             patch("backend.platform.platform_capabilities.IS_WINDOWS", False):
             self.assertEqual(ip.detect_active_app_key(), "")
 
     def test_x11_missing_xdotool_returns_empty(self):
-        with patch("injection_pacing.os.environ", {"DISPLAY": ":0"}), \
-             patch("injection_pacing.shutil.which", return_value=None), \
-             patch("platform_capabilities.IS_WINDOWS", False):
+        with patch("backend.output.injection_pacing.os.environ", {"DISPLAY": ":0"}), \
+             patch("backend.output.injection_pacing.shutil.which", return_value=None), \
+             patch("backend.platform.platform_capabilities.IS_WINDOWS", False):
             self.assertEqual(ip.detect_active_app_key(), "")
 
     def test_x11_subprocess_failure_degrades_to_empty(self):
-        with patch("injection_pacing.os.environ", {"DISPLAY": ":0"}), \
-             patch("injection_pacing.shutil.which", return_value="/usr/bin/xdotool"), \
-             patch("injection_pacing.subprocess.run", side_effect=self._run(raise_exc=subprocess.TimeoutExpired("xdotool", 2))), \
-             patch("platform_capabilities.IS_WINDOWS", False):
+        with patch("backend.output.injection_pacing.os.environ", {"DISPLAY": ":0"}), \
+             patch("backend.output.injection_pacing.shutil.which", return_value="/usr/bin/xdotool"), \
+             patch("backend.output.injection_pacing.subprocess.run", side_effect=self._run(raise_exc=subprocess.TimeoutExpired("xdotool", 2))), \
+             patch("backend.platform.platform_capabilities.IS_WINDOWS", False):
             self.assertEqual(ip.detect_active_app_key(), "")
 
 

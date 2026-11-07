@@ -3,7 +3,7 @@ and every old profile still loads with exactly its old behavior."""
 
 import unittest
 
-import audio_schema as schema
+from backend.audio import audio_schema as schema
 
 
 class OutputDuckingSanitizeTests(unittest.TestCase):

@@ -260,7 +260,7 @@ class ServerDraftTests(unittest.TestCase):
         self.assertEqual(draft["metadata"]["stop_reason"], "manual")
 
     def test_process_recording_result_bypasses_llm_when_ai_cleanup_is_disabled(self):
-        import utils
+        from backend.config import utils
 
         statuses = []
         profile = utils._profile_defaults()
@@ -379,7 +379,7 @@ class ServerDraftTests(unittest.TestCase):
     def test_long_recording_emits_progress_statuses(self):
         import os
         import tempfile
-        import utils
+        from backend.config import utils
 
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
@@ -423,7 +423,7 @@ class ServerDraftTests(unittest.TestCase):
     def test_stitch_pass_disabled_skips_stitching(self):
         import os
         import tempfile
-        import utils
+        from backend.config import utils
 
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
@@ -663,7 +663,7 @@ class ServerDraftTests(unittest.TestCase):
 
     def test_tts_speak_uses_preset_when_no_explicit_fields(self):
         self._isolate_user_data()
-        import voice_presets
+        from backend.stores import voice_presets
         voice_presets.save_preset(
             "Warm Assistant", base="af_bella", blend={"am_adam": 0.2}, speed=1.1, pitch=1.0,
         )
@@ -686,7 +686,7 @@ class ServerDraftTests(unittest.TestCase):
 
     def test_tts_speak_explicit_fields_override_preset(self):
         self._isolate_user_data()
-        import voice_presets
+        from backend.stores import voice_presets
         voice_presets.save_preset("Warm Assistant", base="af_bella", speed=1.1)
         tts = DummyTTSEngine()
 
@@ -750,7 +750,7 @@ class ServerDraftTests(unittest.TestCase):
 
     def test_tts_speak_uses_persona_voice_when_persona_has_identity(self):
         self._isolate_user_data()
-        import llm_engine
+        from backend.llm import llm_engine
         llm_engine.upsert_persona("Narrator", {
             "prompt": "Read it clearly.",
             "voice": {"base": "bm_george", "pitch": -1.0, "energy": 0.8},
@@ -770,7 +770,7 @@ class ServerDraftTests(unittest.TestCase):
 
     def test_tts_speak_persona_without_voice_identity_falls_through_to_profile(self):
         self._isolate_user_data()
-        import llm_engine
+        from backend.llm import llm_engine
         # A persona whose voice was never configured (all defaults) must not
         # override the profile default with its inert base="" / energy=0.5 etc.
         llm_engine.upsert_persona("Plain", {"prompt": "Just rewrite it."})
@@ -787,8 +787,8 @@ class ServerDraftTests(unittest.TestCase):
 
     def test_tts_speak_persona_preset_used_when_persona_base_unset(self):
         self._isolate_user_data()
-        import llm_engine
-        import voice_presets
+        from backend.llm import llm_engine
+        from backend.stores import voice_presets
         voice_presets.save_preset("Presentation Voice", base="am_michael", speed=1.05)
         llm_engine.upsert_persona("Presenter", {
             "prompt": "Present it.", "voice": {"preset": "Presentation Voice"},
@@ -807,7 +807,7 @@ class ServerDraftTests(unittest.TestCase):
 
     def test_tts_speak_explicit_field_overrides_persona(self):
         self._isolate_user_data()
-        import llm_engine
+        from backend.llm import llm_engine
         llm_engine.upsert_persona("Narrator", {
             "prompt": "Read it.", "voice": {"base": "bm_george"},
         })
@@ -826,8 +826,8 @@ class ServerDraftTests(unittest.TestCase):
 
     def test_tts_speak_request_preset_wins_over_persona(self):
         self._isolate_user_data()
-        import llm_engine
-        import voice_presets
+        from backend.llm import llm_engine
+        from backend.stores import voice_presets
         voice_presets.save_preset("Explicit Preset", base="af_sarah")
         llm_engine.upsert_persona("Narrator", {"prompt": "Read it.", "voice": {"base": "bm_george"}})
         tts = DummyTTSEngine()
@@ -922,12 +922,15 @@ class ServerDraftTests(unittest.TestCase):
     def test_primary_action_captures_selection_when_no_pending_draft(self):
         capture_result = {"ok": True, "text": "selected text", "message": "Captured selected text."}
 
-        with patch("clipboard_capture.capture_selection_text_with_restore", return_value=capture_result), patch.object(
+        # speak_text_aloud is mocked: unmocked it initializes the real Kokoro TTS
+        # engine and speaks, which cost ~158 s per run (and could play audio).
+        with patch("backend.output.clipboard_capture.capture_selection_text_with_restore", return_value=capture_result), patch.object(
             server, "broadcast_status_threadsafe"
-        ) as broadcast:
+        ) as broadcast, patch.object(server, "speak_text_aloud") as speak:
             result = server.handle_primary_action()
 
         self.assertEqual(result, capture_result)
+        speak.assert_called_once_with("selected text")
         broadcast.assert_called_with("selection_captured", capture_result)
 
     def test_emergency_stop_stops_recording_typing_and_pending_sends(self):
@@ -952,7 +955,7 @@ class ServerDraftTests(unittest.TestCase):
 
         with patch.object(server, "save_draft_history"), patch.object(server, "broadcast_status_threadsafe") as broadcast:
             with TestClient(server.app) as client:
-                response = client.delete("/drafts")
+                response = client.delete("/drafts?confirm=true")
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"ok": True, "message": "Draft history cleared."})

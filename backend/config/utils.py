@@ -1,0 +1,1321 @@
+import sys
+import os
+import shutil
+import logging
+import glob
+import copy
+import re
+import math
+import yaml
+
+from backend.audio import audio_schema
+
+from backend.config.store_migration import load_versioned_store, write_atomic
+
+def get_app_path():
+    """
+    Returns the base path for READ-ONLY assets (images, default config).
+    CRITICAL: This path is often inside a frozen EXE or temporary _MEIPASS folder.
+    NEVER attempt to write files here.
+    """
+    # PyInstaller creates a temp folder and stores path in _MEIPASS
+    if hasattr(sys, '_MEIPASS'):
+        return sys._MEIPASS
+
+    # PyInstaller 6+ (onedir mode) or standard script execution
+    if getattr(sys, 'frozen', False):
+        # We are running as an EXE (but not onefile, or onefile handled above)
+        base_path = os.path.dirname(sys.executable)
+        
+        # Check for PyInstaller 6+ structure (everything inside _internal)
+        internal_path = os.path.join(base_path, '_internal')
+        if os.path.exists(internal_path):
+            return internal_path
+            
+        return base_path
+        
+    # Standard script execution. This file is <repo>/backend/config/utils.py, so
+    # the repo root is three levels up (it was dirname(__file__) while this
+    # module sat at the repo root). The frozen branches above never reach here.
+    return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+def get_user_data_path():
+    """
+    Returns the one base path for READ/WRITE files (config, logs, profiles,
+    drafts, history DB, recordings, models, voices).
+
+    The location is resolved by app_paths (env override > an existing
+    ~/BetterFingers install > the platform-correct default such as XDG on
+    Linux), so every module writes under a single unified root instead of the
+    old split between ~/BetterFingers and the XDG voices/graph location.
+    Ensures the directory exists before returning.
+    """
+    from backend.config import app_paths
+
+    path = str(app_paths.resolve_base())
+
+    # CRITICAL: This is the ONLY place we should ever write files.
+    if not os.path.exists(path):
+        try:
+            os.makedirs(path)
+            # Logging implies this function works, so use safe print if logging fails later
+            print(f"Verified User Data path: {path}")
+        except OSError as e:
+            print(f"FATAL: Failed to create User Data path {path}: {e}")
+
+    return path
+
+def get_profiles_dir():
+    """Returns the path to the 'profiles' directory."""
+    path = os.path.join(get_user_data_path(), "profiles")
+    if not os.path.exists(path):
+        os.makedirs(path)
+    return path
+
+
+def get_draft_history_path():
+    """Returns the path to the persisted finalized draft history file."""
+    return os.path.join(get_user_data_path(), "draft_history.json")
+
+def check_first_run():
+    """Returns True if this is the first run, False otherwise."""
+    marker_path = os.path.join(get_user_data_path(), ".first_run_complete")
+    if not os.path.exists(marker_path):
+        try:
+            with open(marker_path, "w") as f:
+                f.write("Welcome to BetterFingers!")
+            return True
+        except Exception:
+            return False # Fail safe
+    return False
+
+def _app_state_path():
+    return os.path.join(get_user_data_path(), "app_state.yaml")
+
+
+def _app_state_defaults():
+    return {
+        "launch_count": 0,
+        "donation_prompt_shown": False,
+        "last_active_profile": "Default",
+    }
+
+
+def _sanitize_app_state(state):
+    defaults = _app_state_defaults()
+    payload = state if isinstance(state, dict) else {}
+    launch_count = _coerce_int(payload.get("launch_count", defaults["launch_count"]), defaults["launch_count"], minimum=0)
+    donation_prompt_shown = _coerce_bool(
+        payload.get("donation_prompt_shown", defaults["donation_prompt_shown"]),
+        defaults["donation_prompt_shown"],
+    )
+    last_active_profile = _coerce_str(
+        payload.get("last_active_profile", defaults["last_active_profile"]),
+        defaults["last_active_profile"],
+    )
+    last_active_profile = "".join(
+        ch for ch in last_active_profile if ch.isalnum() or ch in (" ", "_", "-")
+    ).strip() or defaults["last_active_profile"]
+    return {
+        "launch_count": launch_count,
+        "donation_prompt_shown": donation_prompt_shown,
+        "last_active_profile": last_active_profile,
+    }
+
+
+_APP_STATE_SCHEMA_VERSION = 1
+
+
+def load_app_state():
+    path = _app_state_path()
+    defaults = _app_state_defaults()
+    raw, report = load_versioned_store(
+        path, _APP_STATE_SCHEMA_VERSION, {}, default_factory=lambda: dict(defaults), parse=yaml.safe_load,
+    )
+    if report["action"] in ("quarantined", "downgrade_refused"):
+        for warning in report["warnings"]:
+            logging.warning(f"app_state.yaml: {warning}")
+    return _sanitize_app_state(raw)
+
+
+def save_app_state(state):
+    path = _app_state_path()
+    payload = _sanitize_app_state(state)
+    payload["schema_version"] = _APP_STATE_SCHEMA_VERSION
+    try:
+        write_atomic(path, yaml.safe_dump(payload, sort_keys=True))
+    except Exception as exc:
+        logging.error("Failed to save app_state.yaml: %s", exc)
+
+
+def register_launch_and_should_show_donation(threshold=5):
+    safe_threshold = max(1, _coerce_int(threshold, 5, minimum=1))
+    state = load_app_state()
+    state["launch_count"] = int(state.get("launch_count", 0)) + 1
+    should_show = bool(state["launch_count"] >= safe_threshold and not state.get("donation_prompt_shown", False))
+    if should_show:
+        state["donation_prompt_shown"] = True
+    save_app_state(state)
+    return should_show
+
+
+def get_last_active_profile(default="Default"):
+    safe_default = _coerce_str(default, "Default").strip() or "Default"
+    state = load_app_state()
+    candidate = _coerce_str(state.get("last_active_profile", safe_default), safe_default).strip()
+    if not candidate:
+        return safe_default
+    try:
+        profiles = set(list_profiles())
+    except Exception:
+        return safe_default
+    if candidate in profiles:
+        return candidate
+    return safe_default
+
+
+def set_last_active_profile(profile_name):
+    state = load_app_state()
+    candidate = _coerce_str(profile_name, "Default")
+    candidate = "".join(ch for ch in candidate if ch.isalnum() or ch in (" ", "_", "-")).strip() or "Default"
+    state["last_active_profile"] = candidate
+    save_app_state(state)
+
+
+def _coerce_bool(value, default):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"1", "true", "yes", "on", "enabled"}:
+            return True
+        if lowered in {"0", "false", "no", "off", "disabled"}:
+            return False
+    return default
+
+
+def _coerce_int(value, default, minimum=None, maximum=None):
+    try:
+        parsed = int(float(value))
+    except Exception:
+        parsed = int(default)
+    if minimum is not None:
+        parsed = max(int(minimum), parsed)
+    if maximum is not None:
+        parsed = min(int(maximum), parsed)
+    return parsed
+
+
+def _coerce_float(value, default, minimum=None, maximum=None):
+    try:
+        parsed = float(value)
+    except Exception:
+        parsed = float(default)
+    if not math.isfinite(parsed):
+        parsed = float(default)
+    if minimum is not None:
+        parsed = max(float(minimum), parsed)
+    if maximum is not None:
+        parsed = min(float(maximum), parsed)
+    return parsed
+
+
+def _coerce_str(value, default=""):
+    if value is None:
+        return default
+    try:
+        return str(value)
+    except Exception:
+        return default
+
+
+def _coerce_choice(value, default, allowed):
+    lowered_allowed = {str(item).strip().lower() for item in allowed}
+    parsed = _coerce_str(value, default).strip().lower()
+    if parsed in lowered_allowed:
+        return parsed
+    return str(default).strip().lower()
+
+
+def _coerce_device_fingerprint(value):
+    """Normalize a stored microphone fingerprint to its known shape.
+
+    A fingerprint without a device name can't identify anything, so it
+    collapses to {} ("no specific device selected")."""
+    if not isinstance(value, dict):
+        return {}
+    name = _coerce_str(value.get("name", "")).strip()
+    if not name:
+        return {}
+    return {
+        "name": name,
+        "host_api": _coerce_str(value.get("host_api", "")).strip(),
+        "max_input_channels": _coerce_int(value.get("max_input_channels", 0), 0, minimum=0),
+        "default_samplerate": _coerce_float(value.get("default_samplerate", 0.0), 0.0, minimum=0.0),
+        "last_known_index": _coerce_int(value.get("last_known_index", -1), -1, minimum=-1),
+    }
+
+
+def _coerce_color(value, default):
+    parsed = _coerce_str(value, default).strip()
+    if re.fullmatch(r"#[0-9a-fA-F]{6}", parsed):
+        return parsed
+    return default
+
+
+def _sanitize_profile_values(config, defaults):
+    if not isinstance(config, dict):
+        return copy.deepcopy(defaults)
+
+    cfg = config
+    d = defaults
+
+    cfg["hotkey"] = _coerce_str(cfg.get("hotkey", d["hotkey"]), d["hotkey"]).strip() or d["hotkey"]
+    cfg["force_stop_key"] = _coerce_str(cfg.get("force_stop_key", d["force_stop_key"]), d["force_stop_key"]).strip()
+    cfg["manual_send_hotkey"] = _coerce_str(
+        cfg.get("manual_send_hotkey", d["manual_send_hotkey"]), d["manual_send_hotkey"]
+    ).strip()
+    cfg["selection_rewrite_hotkey"] = _coerce_str(
+        cfg.get("selection_rewrite_hotkey", d["selection_rewrite_hotkey"]), d["selection_rewrite_hotkey"]
+    ).strip()
+    cfg["recording_mode"] = _coerce_choice(cfg.get("recording_mode", d["recording_mode"]), d["recording_mode"], {"toggle", "ptt"})
+    cfg["send_mode"] = _coerce_choice(cfg.get("send_mode", d["send_mode"]), d["send_mode"], {"review_first", "auto_send"})
+    cfg["confidence_force_review_enabled"] = _coerce_bool(
+        cfg.get("confidence_force_review_enabled", d["confidence_force_review_enabled"]),
+        d["confidence_force_review_enabled"],
+    )
+    cfg["confidence_force_review_below"] = _coerce_float(
+        cfg.get("confidence_force_review_below", d["confidence_force_review_below"]),
+        d["confidence_force_review_below"],
+        minimum=0.0,
+        maximum=1.0,
+    )
+    cfg["confidence_auto_send_above"] = _coerce_float(
+        cfg.get("confidence_auto_send_above", d["confidence_auto_send_above"]),
+        d["confidence_auto_send_above"],
+        minimum=0.0,
+        maximum=1.0,
+    )
+    cfg["auto_stop_after_silence_enabled"] = _coerce_bool(
+        cfg.get("auto_stop_after_silence_enabled", d["auto_stop_after_silence_enabled"]),
+        d["auto_stop_after_silence_enabled"],
+    )
+    cfg["auto_stop_silence_ms"] = _coerce_int(
+        cfg.get("auto_stop_silence_ms", d["auto_stop_silence_ms"]),
+        d["auto_stop_silence_ms"],
+        minimum=250,
+        maximum=5000,
+    )
+    cfg["auto_stop_min_recording_ms"] = _coerce_int(
+        cfg.get("auto_stop_min_recording_ms", d["auto_stop_min_recording_ms"]),
+        d["auto_stop_min_recording_ms"],
+        minimum=0,
+        maximum=10000,
+    )
+    cfg["streaming_transcription_enabled"] = _coerce_bool(
+        cfg.get("streaming_transcription_enabled", d["streaming_transcription_enabled"]),
+        d["streaming_transcription_enabled"],
+    )
+    cfg["use_delivery_signals"] = _coerce_bool(
+        cfg.get("use_delivery_signals", d["use_delivery_signals"]),
+        d["use_delivery_signals"],
+    )
+    cfg["use_audience_context"] = _coerce_bool(
+        cfg.get("use_audience_context", d["use_audience_context"]),
+        d["use_audience_context"],
+    )
+    cfg["use_persona_traits"] = _coerce_bool(
+        cfg.get("use_persona_traits", d["use_persona_traits"]),
+        d["use_persona_traits"],
+    )
+    cfg["active_contact_id"] = _coerce_str(cfg.get("active_contact_id") or "", "").strip() or None
+    cfg["streaming_batch_min_seconds"] = _coerce_float(
+        cfg.get("streaming_batch_min_seconds", d["streaming_batch_min_seconds"]),
+        d["streaming_batch_min_seconds"],
+        minimum=0.5,
+        maximum=60.0,
+    )
+    cfg["streaming_batch_max_seconds"] = _coerce_float(
+        cfg.get("streaming_batch_max_seconds", d["streaming_batch_max_seconds"]),
+        d["streaming_batch_max_seconds"],
+        minimum=2.0,
+        maximum=120.0,
+    )
+    cfg["streaming_batch_silence_ms"] = _coerce_int(
+        cfg.get("streaming_batch_silence_ms", d["streaming_batch_silence_ms"]),
+        d["streaming_batch_silence_ms"],
+        minimum=100,
+        maximum=5000,
+    )
+    cfg["chat_close_action"] = _coerce_choice(
+        cfg.get("chat_close_action", d["chat_close_action"]),
+        d["chat_close_action"],
+        {"none", "esc", "chat_key"},
+    )
+    cfg["quantization"] = _coerce_choice(cfg.get("quantization", d["quantization"]), d["quantization"], {"int4", "int8"})
+    cfg["model_size"] = _coerce_choice(
+        cfg.get("model_size", d["model_size"]),
+        d["model_size"],
+        {
+            "tiny.en",
+            "base.en",
+            "small.en",
+            "medium.en",
+            "large-v3",
+            "distil-medium.en",
+            "distil-large-v3",
+        },
+    )
+
+    cfg["chat_open_key"] = _coerce_str(cfg.get("chat_open_key", d["chat_open_key"]), d["chat_open_key"]).strip()
+    cfg["voice_mute_key"] = _coerce_str(cfg.get("voice_mute_key", d["voice_mute_key"]), d["voice_mute_key"]).strip()
+    cfg["sign_off_text"] = _coerce_str(cfg.get("sign_off_text", d["sign_off_text"]), d["sign_off_text"])
+    cfg["review_tts_hotkey"] = _coerce_str(
+        cfg.get("review_tts_hotkey", d["review_tts_hotkey"]), d["review_tts_hotkey"]
+    ).strip()
+    cfg["review_tts_voice_hint"] = (
+        _coerce_str(cfg.get("review_tts_voice_hint", d["review_tts_voice_hint"]), d["review_tts_voice_hint"]).strip()
+        or d["review_tts_voice_hint"]
+    )
+    blend = cfg.get("review_tts_blend", d["review_tts_blend"])
+    cfg["review_tts_blend"] = blend if isinstance(blend, dict) else dict(d["review_tts_blend"])
+    cfg["review_tts_pitch"] = _coerce_float(
+        cfg.get("review_tts_pitch", d["review_tts_pitch"]), d["review_tts_pitch"], minimum=-12.0, maximum=12.0
+    )
+    cfg["review_tts_energy"] = _coerce_float(
+        cfg.get("review_tts_energy", d["review_tts_energy"]), d["review_tts_energy"], minimum=0.0, maximum=1.0
+    )
+    cfg["review_tts_warmth"] = _coerce_float(
+        cfg.get("review_tts_warmth", d["review_tts_warmth"]), d["review_tts_warmth"], minimum=0.0, maximum=1.0
+    )
+    cfg["review_tts_brightness"] = _coerce_float(
+        cfg.get("review_tts_brightness", d["review_tts_brightness"]), d["review_tts_brightness"], minimum=0.0, maximum=1.0
+    )
+    cfg["review_tts_pause_style"] = _coerce_choice(
+        cfg.get("review_tts_pause_style", d["review_tts_pause_style"]),
+        d["review_tts_pause_style"],
+        {"natural", "compact", "dramatic"},
+    )
+    cfg["current_preset"] = _coerce_str(cfg.get("current_preset", d["current_preset"]), d["current_preset"])
+    cfg["experience_preset"] = _coerce_choice(
+        cfg.get("experience_preset", d["experience_preset"]),
+        d["experience_preset"],
+        {"custom", "simple", "plus", "pro", "dont_use"},
+    )
+    cfg["llm_model_id"] = (
+        _coerce_str(cfg.get("llm_model_id", d["llm_model_id"]), d["llm_model_id"]).strip() or d["llm_model_id"]
+    )
+
+    cfg["input_device_index"] = _coerce_int(
+        cfg.get("input_device_index", d["input_device_index"]), d["input_device_index"], minimum=-1
+    )
+    cfg["input_device_fingerprint"] = _coerce_device_fingerprint(
+        cfg.get("input_device_fingerprint", d["input_device_fingerprint"])
+    )
+    cfg["audio_ducking"] = _coerce_bool(cfg.get("audio_ducking", d["audio_ducking"]), d["audio_ducking"])
+    cfg["output_ducking"] = audio_schema.sanitize_output_ducking(cfg.get("output_ducking"))
+    cfg["voice_privacy"] = audio_schema.sanitize_voice_privacy(cfg.get("voice_privacy"))
+    cfg["auto_submit"] = _coerce_bool(cfg.get("auto_submit", d["auto_submit"]), d["auto_submit"])
+    cfg["instant_typing"] = _coerce_bool(cfg.get("instant_typing", d["instant_typing"]), d["instant_typing"])
+    cfg["per_app_pacing_enabled"] = _coerce_bool(
+        cfg.get("per_app_pacing_enabled", d["per_app_pacing_enabled"]),
+        d["per_app_pacing_enabled"],
+    )
+    overrides = cfg.get("injection_pacing_overrides", d["injection_pacing_overrides"])
+    cfg["injection_pacing_overrides"] = overrides if isinstance(overrides, dict) else dict(d["injection_pacing_overrides"])
+    cfg["restore_clipboard_after_paste"] = _coerce_bool(
+        cfg.get("restore_clipboard_after_paste", d["restore_clipboard_after_paste"]),
+        d["restore_clipboard_after_paste"],
+    )
+    cfg["review_tts_enabled"] = _coerce_bool(cfg.get("review_tts_enabled", d["review_tts_enabled"]), d["review_tts_enabled"])
+    cfg["llm_enabled"] = _coerce_bool(cfg.get("llm_enabled", d["llm_enabled"]), d["llm_enabled"])
+    cfg["true_gen"] = _coerce_bool(cfg.get("true_gen", d["true_gen"]), d["true_gen"])
+    cfg["organic_formatting_enabled"] = _coerce_bool(
+        cfg.get("organic_formatting_enabled", d["organic_formatting_enabled"]),
+        d["organic_formatting_enabled"],
+    )
+    cfg["long_recording_stitch_pass_enabled"] = _coerce_bool(
+        cfg.get("long_recording_stitch_pass_enabled", d["long_recording_stitch_pass_enabled"]),
+        d["long_recording_stitch_pass_enabled"],
+    )
+    cfg["use_gpu"] = _coerce_bool(cfg.get("use_gpu", d["use_gpu"]), d["use_gpu"])
+    cfg["model_keep_llm_loaded"] = _coerce_bool(
+        cfg.get("model_keep_llm_loaded", d["model_keep_llm_loaded"]),
+        d["model_keep_llm_loaded"],
+    )
+    cfg["model_keep_stt_loaded"] = _coerce_bool(
+        cfg.get("model_keep_stt_loaded", d["model_keep_stt_loaded"]),
+        d["model_keep_stt_loaded"],
+    )
+    cfg["model_keep_tts_loaded"] = _coerce_bool(
+        cfg.get("model_keep_tts_loaded", d["model_keep_tts_loaded"]),
+        d["model_keep_tts_loaded"],
+    )
+    cfg["notification_overlay_enabled"] = _coerce_bool(
+        cfg.get("notification_overlay_enabled", d["notification_overlay_enabled"]),
+        d["notification_overlay_enabled"],
+    )
+    cfg["preview_overlay_enabled"] = _coerce_bool(
+        cfg.get("preview_overlay_enabled", d["preview_overlay_enabled"]),
+        d["preview_overlay_enabled"],
+    )
+    cfg["status_indicator_enabled"] = _coerce_bool(
+        cfg.get("status_indicator_enabled", d["status_indicator_enabled"]),
+        d["status_indicator_enabled"],
+    )
+    cfg["status_indicator_flash_enabled"] = _coerce_bool(
+        cfg.get("status_indicator_flash_enabled", d["status_indicator_flash_enabled"]),
+        d["status_indicator_flash_enabled"],
+    )
+    cfg["controller_enabled"] = _coerce_bool(cfg.get("controller_enabled", d["controller_enabled"]), d["controller_enabled"])
+    cfg["controller_ptt"] = _coerce_bool(cfg.get("controller_ptt", d["controller_ptt"]), d["controller_ptt"])
+
+    cfg["audio_ducking_level_percent"] = _coerce_float(
+        cfg.get("audio_ducking_level_percent", d["audio_ducking_level_percent"]),
+        d["audio_ducking_level_percent"],
+        minimum=1.0,
+        maximum=100.0,
+    )
+    cfg["audio_ducking_fallback_return_percent"] = _coerce_float(
+        cfg.get("audio_ducking_fallback_return_percent", d["audio_ducking_fallback_return_percent"]),
+        d["audio_ducking_fallback_return_percent"],
+        minimum=1.0,
+        maximum=100.0,
+    )
+    cfg["min_inter_key_delay"] = _coerce_float(
+        cfg.get("min_inter_key_delay", d["min_inter_key_delay"]),
+        d["min_inter_key_delay"],
+        minimum=0.0001,
+        maximum=1.0,
+    )
+    cfg["max_inter_key_delay"] = _coerce_float(
+        cfg.get("max_inter_key_delay", d["max_inter_key_delay"]),
+        d["max_inter_key_delay"],
+        minimum=0.0002,
+        maximum=1.5,
+    )
+    cfg["min_key_hold"] = _coerce_float(
+        cfg.get("min_key_hold", d["min_key_hold"]),
+        d["min_key_hold"],
+        minimum=0.0005,
+        maximum=1.0,
+    )
+    cfg["max_key_hold"] = _coerce_float(
+        cfg.get("max_key_hold", d["max_key_hold"]),
+        d["max_key_hold"],
+        minimum=0.0006,
+        maximum=1.5,
+    )
+    if cfg["max_inter_key_delay"] < cfg["min_inter_key_delay"]:
+        cfg["max_inter_key_delay"] = cfg["min_inter_key_delay"]
+    if cfg["max_key_hold"] < cfg["min_key_hold"]:
+        cfg["max_key_hold"] = cfg["min_key_hold"]
+
+    cfg["review_tts_speed"] = _coerce_float(
+        cfg.get("review_tts_speed", d["review_tts_speed"]),
+        d["review_tts_speed"],
+        minimum=0.5,
+        maximum=3.0,
+    )
+    cfg["notification_overlay_alpha"] = _coerce_float(
+        cfg.get("notification_overlay_alpha", d["notification_overlay_alpha"]),
+        d["notification_overlay_alpha"],
+        minimum=0.1,
+        maximum=1.0,
+    )
+    cfg["preview_overlay_alpha"] = _coerce_float(
+        cfg.get("preview_overlay_alpha", d["preview_overlay_alpha"]),
+        d["preview_overlay_alpha"],
+        minimum=0.1,
+        maximum=1.0,
+    )
+    cfg["no_audio_min_duration_sec"] = _coerce_float(
+        cfg.get("no_audio_min_duration_sec", d["no_audio_min_duration_sec"]),
+        d["no_audio_min_duration_sec"],
+        minimum=0.0,
+        maximum=30.0,
+    )
+    cfg["no_audio_min_rms"] = _coerce_float(
+        cfg.get("no_audio_min_rms", d["no_audio_min_rms"]),
+        d["no_audio_min_rms"],
+        minimum=0.0,
+        maximum=1.0,
+    )
+    cfg["no_audio_min_peak"] = _coerce_float(
+        cfg.get("no_audio_min_peak", d["no_audio_min_peak"]),
+        d["no_audio_min_peak"],
+        minimum=0.0,
+        maximum=1.0,
+    )
+    cfg["controller_axis_threshold"] = _coerce_float(
+        cfg.get("controller_axis_threshold", d["controller_axis_threshold"]),
+        d["controller_axis_threshold"],
+        minimum=0.1,
+        maximum=1.0,
+    )
+
+    cfg["notification_overlay_custom_x"] = _coerce_int(
+        cfg.get("notification_overlay_custom_x", d["notification_overlay_custom_x"]),
+        d["notification_overlay_custom_x"],
+    )
+    cfg["notification_overlay_custom_y"] = _coerce_int(
+        cfg.get("notification_overlay_custom_y", d["notification_overlay_custom_y"]),
+        d["notification_overlay_custom_y"],
+    )
+    cfg["preview_overlay_custom_x"] = _coerce_int(
+        cfg.get("preview_overlay_custom_x", d["preview_overlay_custom_x"]),
+        d["preview_overlay_custom_x"],
+    )
+    cfg["preview_overlay_custom_y"] = _coerce_int(
+        cfg.get("preview_overlay_custom_y", d["preview_overlay_custom_y"]),
+        d["preview_overlay_custom_y"],
+    )
+    cfg["controller_button"] = _coerce_int(cfg.get("controller_button", d["controller_button"]), d["controller_button"], minimum=0)
+    cfg["controller_sequence_window_ms"] = _coerce_int(
+        cfg.get("controller_sequence_window_ms", d["controller_sequence_window_ms"]),
+        d["controller_sequence_window_ms"],
+        minimum=100,
+        maximum=2000,
+    )
+    cfg["output_token_limit"] = _coerce_int(
+        cfg.get("output_token_limit", d["output_token_limit"]),
+        d["output_token_limit"],
+        minimum=900,
+        maximum=1200,
+    )
+    # max_completion_tokens is the real per-call LLM completion ceiling;
+    # long_draft_warning_words only drives the "this draft is long" UI warning.
+    cfg["max_completion_tokens"] = _coerce_int(
+        cfg.get("max_completion_tokens", d["max_completion_tokens"]),
+        d["max_completion_tokens"],
+        minimum=512,
+        maximum=4096,
+    )
+    cfg["long_draft_warning_words"] = _coerce_int(
+        cfg.get("long_draft_warning_words", d["long_draft_warning_words"]),
+        d["long_draft_warning_words"],
+        minimum=300,
+        maximum=10000,
+    )
+    cfg["llm_chunk_size"] = _coerce_int(
+        cfg.get("llm_chunk_size", d.get("llm_chunk_size", 750)),
+        d.get("llm_chunk_size", 750),
+        minimum=50,
+        maximum=5000,
+    )
+    cfg["whisper_chunk_size"] = _coerce_int(
+        cfg.get("whisper_chunk_size", d.get("whisper_chunk_size", 1000)),
+        d.get("whisper_chunk_size", 1000),
+        minimum=50,
+        maximum=5000,
+    )
+    cfg["draft_history_limit"] = _coerce_int(
+        cfg.get("draft_history_limit", d["draft_history_limit"]),
+        d["draft_history_limit"],
+        minimum=10,
+        maximum=500,
+    )
+    cfg["long_input_message"] = (
+        _coerce_str(cfg.get("long_input_message", d["long_input_message"]), d["long_input_message"]).strip()
+        or d["long_input_message"]
+    )
+
+    cfg["overlay_position"] = _coerce_choice(
+        cfg.get("overlay_position", d["overlay_position"]),
+        d["overlay_position"],
+        {"top-left", "top-right", "bottom-left", "bottom-right", "mid-left", "mid-right"},
+    ).title().replace("-", "-")
+    cfg["notification_overlay_position"] = _coerce_choice(
+        cfg.get("notification_overlay_position", d["notification_overlay_position"]),
+        d["notification_overlay_position"],
+        {"top-left", "top-right", "bottom-left", "bottom-right", "custom"},
+    ).title().replace("-", "-")
+    cfg["preview_overlay_position"] = _coerce_choice(
+        cfg.get("preview_overlay_position", d["preview_overlay_position"]),
+        d["preview_overlay_position"],
+        {"top-left", "top-right", "bottom-left", "bottom-right", "custom"},
+    ).title().replace("-", "-")
+
+    cfg["notification_overlay_bg"] = _coerce_color(
+        cfg.get("notification_overlay_bg", d["notification_overlay_bg"]),
+        d["notification_overlay_bg"],
+    )
+    cfg["notification_overlay_fg"] = _coerce_color(
+        cfg.get("notification_overlay_fg", d["notification_overlay_fg"]),
+        d["notification_overlay_fg"],
+    )
+    cfg["preview_overlay_bg"] = _coerce_color(
+        cfg.get("preview_overlay_bg", d["preview_overlay_bg"]),
+        d["preview_overlay_bg"],
+    )
+    cfg["preview_overlay_fg"] = _coerce_color(
+        cfg.get("preview_overlay_fg", d["preview_overlay_fg"]),
+        d["preview_overlay_fg"],
+    )
+    cfg["preview_overlay_text_bg"] = _coerce_color(
+        cfg.get("preview_overlay_text_bg", d["preview_overlay_text_bg"]),
+        d["preview_overlay_text_bg"],
+    )
+    cfg["status_indicator_color_idle"] = _coerce_color(
+        cfg.get("status_indicator_color_idle", d["status_indicator_color_idle"]),
+        d["status_indicator_color_idle"],
+    )
+    cfg["status_indicator_color_listening"] = _coerce_color(
+        cfg.get("status_indicator_color_listening", d["status_indicator_color_listening"]),
+        d["status_indicator_color_listening"],
+    )
+    cfg["status_indicator_color_recording"] = _coerce_color(
+        cfg.get("status_indicator_color_recording", d["status_indicator_color_recording"]),
+        d["status_indicator_color_recording"],
+    )
+    cfg["status_indicator_color_processing"] = _coerce_color(
+        cfg.get("status_indicator_color_processing", d["status_indicator_color_processing"]),
+        d["status_indicator_color_processing"],
+    )
+    return cfg
+
+def _migrate_controller_binding(config):
+    """Backfill modern controller binding fields from legacy config keys.
+
+    Deliberately NOT part of store_migration.py's version-gated ladder (see
+    load_profile) — runs unconditionally every load, not schema_version-
+    gated. Don't "helpfully" fold this into the ladder without re-reading
+    that reasoning.
+    """
+    if not isinstance(config, dict):
+        return config
+
+    legacy_enabled = bool(config.get("controller_ptt", False))
+    current_enabled = bool(config.get("controller_enabled", False))
+    if "controller_enabled" not in config:
+        config["controller_enabled"] = legacy_enabled
+    elif legacy_enabled and not current_enabled:
+        config["controller_enabled"] = True
+
+    sequence_window_ms = config.get("controller_sequence_window_ms", 400)
+    axis_threshold = config.get("controller_axis_threshold", 0.6)
+
+    binding = config.get("controller_binding")
+    if isinstance(binding, dict):
+        style = str(binding.get("style", "single")).strip().lower() or "single"
+        events = binding.get("events", [])
+        if isinstance(events, str):
+            events = [events]
+        if not isinstance(events, list):
+            events = []
+        binding["style"] = style
+        binding["events"] = [str(e).strip().lower() for e in events if str(e).strip()]
+        try:
+            legacy_button = int(config.get("controller_button", 4))
+        except (TypeError, ValueError):
+            legacy_button = 4
+        if binding["events"] == ["button:4"] and legacy_button != 4:
+            binding["events"] = [f"button:{legacy_button}"]
+        if not binding["events"]:
+            binding["events"] = [f"button:{legacy_button}"]
+        binding["sequence_window_ms"] = int(binding.get("sequence_window_ms", sequence_window_ms))
+        binding["axis_threshold"] = float(binding.get("axis_threshold", axis_threshold))
+        binding["device_scope"] = binding.get("device_scope", "any_device")
+        config["controller_binding"] = binding
+        return config
+
+    try:
+        btn = int(config.get("controller_button", 4))
+    except (TypeError, ValueError):
+        btn = 4
+
+    config["controller_binding"] = {
+        "style": "single",
+        "events": [f"button:{btn}"],
+        "sequence_window_ms": int(sequence_window_ms),
+        "axis_threshold": float(axis_threshold),
+        "device_scope": "any_device",
+    }
+    return config
+
+
+def _migrate_output_delivery(config):
+    """Normalize output delivery settings and drop deprecated keys.
+
+    Deliberately NOT part of store_migration.py's version-gated ladder (see
+    load_profile) — runs unconditionally every load, not schema_version-
+    gated. Don't "helpfully" fold this into the ladder without re-reading
+    that reasoning.
+    """
+    if not isinstance(config, dict):
+        return config
+
+    legacy_token_cap = config.get("token_cap_tokens")
+    if legacy_token_cap is not None:
+        config["output_token_limit"] = legacy_token_cap
+
+    legacy_cap_message = config.get("token_cap_message")
+    if legacy_cap_message:
+        config["long_input_message"] = legacy_cap_message
+
+    mode = str(config.get("send_mode", "review_first") or "review_first").strip().lower()
+    if mode not in {"review_first", "auto_send"}:
+        mode = "review_first"
+    config["send_mode"] = mode
+    config.pop("send_method", None)
+    config.pop("live_output_mode", None)
+    config.pop("token_cap_enabled", None)
+    config.pop("token_cap_tokens", None)
+    config.pop("token_cap_message", None)
+    config.pop("final_transcription_pass", None)
+    return config
+
+
+def _apply_completion_token_alias(data):
+    """Map the legacy ``output_token_limit`` onto ``max_completion_tokens`` for
+    profiles saved before the two token concepts were split. Operates on the raw
+    loaded dict *before* it is merged with defaults, so we can tell whether the
+    new field was actually stored or is about to be filled in from defaults.
+
+    Deliberately NOT part of store_migration.py's version-gated ladder (see
+    load_profile) — this before-merge timing, versus the other two migrations'
+    after-merge timing, is exactly why folding all three into one ladder step
+    was judged riskier than it's worth. Don't "helpfully" fold this in without
+    re-reading that reasoning.
+    """
+    if not isinstance(data, dict):
+        return data
+    if "max_completion_tokens" not in data and "output_token_limit" in data:
+        try:
+            legacy = int(data["output_token_limit"])
+            data["max_completion_tokens"] = max(512, min(4096, legacy))
+        except (TypeError, ValueError):
+            pass
+    return data
+
+
+# Existing on-disk profiles with no schema_version key are implicit v1 —
+# zero-disruption for current users. No ladder registered yet (see
+# load_profile's comment on why the existing migration functions stay
+# outside store_migration's generic ladder for now).
+_PROFILE_SCHEMA_VERSION = 1
+
+
+def _profile_defaults():
+    return {
+        "hotkey": "f8",
+        "force_stop_key": "",
+        "manual_send_hotkey": "f9",
+        "selection_rewrite_hotkey": "ctrl+alt+r",
+        "recording_mode": "toggle",
+        "min_inter_key_delay": 0.08,
+        "max_inter_key_delay": 0.16,
+        "min_key_hold": 0.015,
+        "max_key_hold": 0.035,
+        "instant_typing": False,
+        # Per-app injection pacing: slow the keystroke rate (or paste) for slow
+        # targets so text isn't mangled (e.g. LibreOffice). Off → type at the
+        # tool default everywhere. Overrides map app_key -> {strategy,
+        # key_delay_ms} for user tuning.
+        "per_app_pacing_enabled": True,
+        "injection_pacing_overrides": {},
+        # After a paste-injection, restore the user's prior clipboard so a draft
+        # doesn't clobber whatever they had copied (§7 clipboard restoration).
+        "restore_clipboard_after_paste": True,
+        "chat_open_key": "",
+        "voice_mute_key": "",
+        # Input (microphone) device index into sounddevice's device list. -1 means
+        # "use the system default input device" (the prior always-on behavior).
+        "input_device_index": -1,
+        # Stable identity of the selected microphone (name, host API, channel
+        # count, sample rate, last-known index). PortAudio indices shift after
+        # reboots/USB churn/driver updates, so the index above is only a hint;
+        # recording start resolves this fingerprint to the current index.
+        # Empty dict means "no specific device selected".
+        "input_device_fingerprint": {},
+        "audio_ducking": False,
+        "audio_ducking_level_percent": 18.0,
+        "audio_ducking_fallback_return_percent": 100.0,
+        # D-0010: output ducking and input voice privacy are separate
+        # settings. The three keys above are the legacy projection of these
+        # two blocks and are kept in sync by audio_schema on every load/save.
+        "output_ducking": audio_schema.output_ducking_defaults(),
+        "voice_privacy": audio_schema.voice_privacy_defaults(),
+        "auto_submit": False,
+        "sign_off_text": "",
+        "send_mode": "review_first",
+        # Confidence-gated send policy (Phase 12): when enabled, a draft must be
+        # reviewed before it can auto-send unless the ASR confidence is high, the
+        # draft is short, and no no-audio gate fired. Keeps a mumbled utterance
+        # from silently injecting even in auto_send mode.
+        "confidence_force_review_enabled": True,
+        "confidence_force_review_below": 0.55,
+        "confidence_auto_send_above": 0.85,
+        # Hands-free auto-stop after trailing silence (Phase 10). Off by default;
+        # silence is defined by the no-audio gate thresholds unless the optional
+        # auto_stop_rms_threshold / auto_stop_peak_threshold overrides are set.
+        # Feed the numbers-only delivery-signal summary (pace/energy/pause
+        # counts from speech_signals) into the main cleanup prompt.
+        #
+        # OFF by default, and deliberately so: this is the first thing that lets
+        # observed delivery influence the words the user actually sends. Rule 5
+        # makes stated emotional intensity a preservation invariant, so the
+        # default stays off until the preservation eval in
+        # tests/test_delivery_signal_prompt.py is trusted on real models rather
+        # than a fake one. Nothing about this changes what is captured or
+        # stored — the signals are computed and persisted either way.
+        "use_delivery_signals": False,
+        # Audience context (Stage 11). Same shape and the same reason for the
+        # default: this is the second thing that can change the words the user
+        # actually sends, so it ships off until the preservation differential
+        # covers audience as its own axis. Nothing about this changes what is
+        # captured or stored -- a contact is saved and selectable either way,
+        # it just does not reach the prompt.
+        "use_audience_context": False,
+        # Persona traits (Stage 10). The design doc argued this needed no
+        # toggle -- neutral emits nothing, so the feature is inert until a
+        # slider moves. The gate disagreed: non-neutral traits degraded
+        # preservation on 2 of 3 probes on a real model, at moderate bands as
+        # well as extreme ones. A persona whose sliders HAVE been moved is not
+        # proven safe yet, so the rendering ships behind this.
+        "use_persona_traits": False,
+        # Which contact is currently selected, or None. Sticky like
+        # current_preset above, deliberately: rule 2 is about who decides, not
+        # how often they are interrupted, and re-confirming a standing choice
+        # before every utterance is friction with no safety benefit. Empty
+        # string is normalized to None so "nobody" is one value, not two.
+        "active_contact_id": None,
+        "auto_stop_after_silence_enabled": False,
+        "auto_stop_silence_ms": 900,
+        "auto_stop_min_recording_ms": 700,
+        # Streaming batch transcription: Whisper transcribes silence-bounded
+        # batches WHILE recording (so stop→draft only drains the tail), and a
+        # recording that finishes while the pipeline is busy is held in a queue
+        # instead of being rejected. Silence uses the no-audio gate thresholds.
+        "streaming_transcription_enabled": True,
+        "streaming_batch_min_seconds": 3.0,
+        "streaming_batch_max_seconds": 12.0,
+        "streaming_batch_silence_ms": 600,
+        "output_token_limit": 1100,  # legacy alias for max_completion_tokens
+        "max_completion_tokens": 1600,
+        "long_draft_warning_words": 1200,
+        "long_recording_stitch_pass_enabled": True,
+        "llm_chunk_size": 750,
+        "whisper_chunk_size": 1000,
+        "draft_history_limit": 80,
+        "long_input_message": "It looks like you have a lot to say. Give us a second.",
+        "chat_close_action": "none",
+        "review_tts_enabled": True,
+        "review_tts_hotkey": "ctrl+shift+space",
+        "review_tts_speed": 1.5,
+        "review_tts_voice_hint": "english",
+        # Voice Studio blend/modulation (side-track: voice blending UI + TTS
+        # sync). Previously these lived only in ephemeral renderer state, so
+        # the automatic/canonical playback path (speak_text_aloud) never saw
+        # them and reset to nothing on every reload. Now part of the same
+        # profile boundary as review_tts_voice_hint/review_tts_speed above.
+        "review_tts_blend": {},
+        "review_tts_pitch": 0.0,
+        "review_tts_energy": 0.5,
+        "review_tts_warmth": 0.0,
+        "review_tts_brightness": 0.0,
+        "review_tts_pause_style": "natural",
+        "organic_formatting_enabled": True,
+        # AI cleanup is opt-in. A fresh install must not start or download the
+        # multi-gigabyte LLM merely because the local backend launched.
+        "model_keep_llm_loaded": False,
+        "model_keep_stt_loaded": True,
+        "model_keep_tts_loaded": False,
+        "llm_model_id": "gemma-4-e2b-q4",
+        "overlay_position": "Bottom-Right",
+        "status_indicator_enabled": True,
+        "status_indicator_flash_enabled": True,
+        "status_indicator_color_idle": "#808080",
+        "status_indicator_color_listening": "#14b8a6",
+        "status_indicator_color_recording": "#ff3b30",
+        "status_indicator_color_processing": "#fbbf24",
+        "notification_overlay_enabled": True,
+        "notification_overlay_position": "Bottom-Right",
+        "notification_overlay_custom_x": 40,
+        "notification_overlay_custom_y": 40,
+        "notification_overlay_alpha": 0.85,
+        "notification_overlay_bg": "#161616",
+        "notification_overlay_fg": "#f2f2f2",
+        "preview_overlay_enabled": True,
+        "preview_overlay_position": "Bottom-Right",
+        "preview_overlay_custom_x": 120,
+        "preview_overlay_custom_y": 120,
+        "preview_overlay_alpha": 0.95,
+        "preview_overlay_bg": "#111111",
+        "preview_overlay_fg": "#f2f2f2",
+        "preview_overlay_text_bg": "#1d1d1d",
+        "no_audio_min_duration_sec": 0.30,
+        "no_audio_min_rms": 0.003,
+        "no_audio_min_peak": 0.015,
+        "llm_enabled": False,
+        "current_preset": "True Janitor",
+        "experience_preset": "custom",
+        "true_gen": False,
+        "use_gpu": True,
+        "quantization": "int8",
+        "model_size": "base.en",
+        "controller_enabled": False,
+        "controller_ptt": False,  # legacy compatibility key
+        "controller_button": 4,   # legacy compatibility key
+        "controller_sequence_window_ms": 400,
+        "controller_axis_threshold": 0.6,
+        "controller_binding": {
+            "style": "single",
+            "events": ["button:4"],
+            "sequence_window_ms": 400,
+            "axis_threshold": 0.6,
+            "device_scope": "any_device",
+        },
+    }
+
+
+def _safe_profile_filename(profile_name):
+    """Coerce a profile name to a filesystem-safe basename (defense-in-depth).
+
+    server.sanitize_profile_name applies the same whitelist at the HTTP
+    boundary; this second barrier at the single path-construction choke point
+    guarantees no separator/traversal characters can reach the filesystem even
+    from an internal caller (py/path-injection hardening). os.path.basename is
+    applied last as the taint-breaking barrier CodeQL recognizes (in addition
+    to the character whitelist, which already strips separators)."""
+    name = "".join(
+        ch for ch in str(profile_name or "") if ch.isalnum() or ch in (" ", "_", "-")
+    ).strip()
+    return os.path.basename(name) or "Default"
+
+
+def load_profile(profile_name="Default"):
+    """
+    Loads a specific profile.
+    If it doesn't exist, returns default settings (and creates the file for 'Default').
+    """
+    profiles_dir = get_profiles_dir()
+    profile_name = _safe_profile_filename(profile_name)
+    file_path = os.path.join(profiles_dir, f"{profile_name}.yaml")
+    
+    defaults = _profile_defaults()
+
+    if not os.path.exists(file_path):
+        if profile_name == "Default":
+            # Check for legacy config.yaml migration
+            legacy_config = os.path.join(get_user_data_path(), "config.yaml")
+            if os.path.exists(legacy_config):
+                try:
+                    with open(legacy_config, "r") as f:
+                        data = yaml.safe_load(f) or {}
+                        _apply_completion_token_alias(data)
+                        # Merge with defaults to ensure all keys exist
+                        migrated = copy.deepcopy(defaults)
+                        migrated.update(data)
+                        _migrate_controller_binding(migrated)
+                        _migrate_output_delivery(migrated)
+                        audio_schema.migrate_audio_settings(migrated)
+                        audio_schema.project_legacy_audio_keys(migrated)
+                        _sanitize_profile_values(migrated, defaults)
+                        save_profile("Default", migrated)
+                        return migrated
+                except Exception as e:
+                    logging.error(f"Failed to migrate legacy config: {e}")
+
+            migrated = copy.deepcopy(defaults)
+            _migrate_controller_binding(migrated)
+            _migrate_output_delivery(migrated)
+            audio_schema.migrate_audio_settings(migrated)
+            audio_schema.project_legacy_audio_keys(migrated)
+            _sanitize_profile_values(migrated, defaults)
+            save_profile("Default", migrated)
+            return migrated
+        return copy.deepcopy(defaults)
+
+    # File-level discipline (store_migration.py, DESIGN §9.5): a corrupt/
+    # unparseable profile is quarantined instead of crashing here (the gap
+    # this used to have — a broken YAML file threw, caught below, and just
+    # silently ran on defaults with the corrupt file left in place to bite
+    # the NEXT load too). A profile from a schema_version newer than this
+    # build understands is never touched. No migration ladder is registered
+    # yet — _apply_completion_token_alias/_migrate_controller_binding/
+    # _migrate_output_delivery below remain this app's own unconditional,
+    # idempotent-by-construction value-level migrations (not schema_version-
+    # gated); moving their exact merge-then-migrate-then-sanitize ordering
+    # into the generic ladder was judged higher regression risk than value
+    # to a utils.py function this deeply relied upon, so it stays as-is.
+    data, report = load_versioned_store(
+        file_path, _PROFILE_SCHEMA_VERSION, {}, default_factory=dict, parse=yaml.safe_load,
+    )
+    if report["action"] in ("quarantined", "downgrade_refused"):
+        for warning in report["warnings"]:
+            logging.warning(f"{profile_name}.yaml: {warning}")
+
+    try:
+        _apply_completion_token_alias(data)
+        # Merge with defaults to ensure missing keys don't break things
+        final_data = copy.deepcopy(defaults)
+        final_data.update(data)
+        _migrate_controller_binding(final_data)
+        _migrate_output_delivery(final_data)
+        audio_schema.migrate_audio_settings(final_data)
+        audio_schema.project_legacy_audio_keys(final_data)
+        _sanitize_profile_values(final_data, defaults)
+        if report["action"] == "quarantined":
+            # Recreate the file on disk, same as the "file didn't exist"
+            # path above — otherwise the app runs on in-memory-only settings
+            # that silently vanish on the next restart.
+            save_profile(profile_name, final_data)
+        return final_data
+    except Exception as e:
+        logging.error(f"Failed to load profile {profile_name}: {e}")
+        return defaults
+
+def validate_profile_settings(data: dict):
+    # 1. Check numeric ranges
+    token_limit = data.get("output_token_limit")
+    if token_limit is not None:
+        try:
+            val = int(token_limit)
+        except (TypeError, ValueError):
+            raise ValueError("Output Token Limit must be an integer.")
+        if not (900 <= val <= 1200):
+            raise ValueError("Output Token Limit must be between 900 and 1200.")
+
+    max_completion = data.get("max_completion_tokens")
+    if max_completion is not None:
+        try:
+            val = int(max_completion)
+        except (TypeError, ValueError):
+            raise ValueError("Max Completion Tokens must be an integer.")
+        if not (512 <= val <= 4096):
+            raise ValueError("Max Completion Tokens must be between 512 and 4096.")
+
+    long_warning = data.get("long_draft_warning_words")
+    if long_warning is not None:
+        try:
+            val = int(long_warning)
+        except (TypeError, ValueError):
+            raise ValueError("Long Draft Warning must be an integer.")
+        if not (300 <= val <= 10000):
+            raise ValueError("Long Draft Warning must be between 300 and 10000.")
+
+    llm_chunk = data.get("llm_chunk_size")
+    if llm_chunk is not None:
+        try:
+            val = int(llm_chunk)
+        except (TypeError, ValueError):
+            raise ValueError("LLM Chunk Size must be an integer.")
+        if not (50 <= val <= 5000):
+            raise ValueError("LLM Chunk Size must be between 50 and 5000.")
+
+    whisper_chunk = data.get("whisper_chunk_size")
+    if whisper_chunk is not None:
+        try:
+            val = int(whisper_chunk)
+        except (TypeError, ValueError):
+            raise ValueError("Whisper Chunk Size must be an integer.")
+        if not (50 <= val <= 5000):
+            raise ValueError("Whisper Chunk Size must be between 50 and 5000.")
+
+    tts_speed = data.get("review_tts_speed")
+    if tts_speed is not None:
+        try:
+            val = float(tts_speed)
+        except (TypeError, ValueError):
+            raise ValueError("TTS Speed must be a float.")
+        if not (0.5 <= val <= 3.0):
+            raise ValueError("TTS Speed must be between 0.5 and 3.0.")
+
+    for _conf_field, _conf_label in (
+        ("confidence_force_review_below", "Force-Review Confidence"),
+        ("confidence_auto_send_above", "Auto-Send Confidence"),
+    ):
+        _conf_val = data.get(_conf_field)
+        if _conf_val is not None:
+            try:
+                val = float(_conf_val)
+            except (TypeError, ValueError):
+                raise ValueError(f"{_conf_label} must be a number.")
+            if not (0.0 <= val <= 1.0):
+                raise ValueError(f"{_conf_label} must be between 0.0 and 1.0.")
+
+    auto_stop_silence = data.get("auto_stop_silence_ms")
+    if auto_stop_silence is not None:
+        try:
+            val = int(auto_stop_silence)
+        except (TypeError, ValueError):
+            raise ValueError("Auto-Stop Silence must be an integer (ms).")
+        if not (250 <= val <= 5000):
+            raise ValueError("Auto-Stop Silence must be between 250 and 5000 ms.")
+
+    auto_stop_min = data.get("auto_stop_min_recording_ms")
+    if auto_stop_min is not None:
+        try:
+            val = int(auto_stop_min)
+        except (TypeError, ValueError):
+            raise ValueError("Auto-Stop Minimum Recording must be an integer (ms).")
+        if not (0 <= val <= 10000):
+            raise ValueError("Auto-Stop Minimum Recording must be between 0 and 10000 ms.")
+
+    no_audio_duration = data.get("no_audio_min_duration_sec")
+    if no_audio_duration is not None:
+        try:
+            val = float(no_audio_duration)
+        except (TypeError, ValueError):
+            raise ValueError("No-Audio Min Duration must be a float.")
+        if not (0.0 <= val <= 30.0):
+            raise ValueError("No-Audio Min Duration must be between 0.0 and 30.0.")
+
+    no_audio_rms = data.get("no_audio_min_rms")
+    if no_audio_rms is not None:
+        try:
+            val = float(no_audio_rms)
+        except (TypeError, ValueError):
+            raise ValueError("No-Audio Min RMS must be a float.")
+        if not (0.0 <= val <= 1.0):
+            raise ValueError("No-Audio Min RMS must be between 0.0 and 1.0.")
+
+    no_audio_peak = data.get("no_audio_min_peak")
+    if no_audio_peak is not None:
+        try:
+            val = float(no_audio_peak)
+        except (TypeError, ValueError):
+            raise ValueError("No-Audio Min Peak must be a float.")
+        if not (0.0 <= val <= 1.0):
+            raise ValueError("No-Audio Min Peak must be between 0.0 and 1.0.")
+
+    # 2. Check for duplicate/conflicting hotkeys
+    hotkey_fields = {
+        "Recording Hotkey": data.get("hotkey"),
+        "Emergency Stop": data.get("force_stop_key"),
+        "Primary Action": data.get("manual_send_hotkey"),
+        "Review TTS Hotkey": data.get("review_tts_hotkey"),
+        "Selection Rewrite Hotkey": data.get("selection_rewrite_hotkey"),
+        "Open Chat Key": data.get("chat_open_key"),
+        "Voice Mute Key": audio_schema.voice_privacy_of(data)["mute_binding"],
+    }
+    cleaned_keys = {}
+    for name, key in hotkey_fields.items():
+        if key:
+            key_clean = str(key).strip().lower()
+            if key_clean:
+                cleaned_keys[name] = key_clean
+
+    seen_keys = {}
+    for name, key in cleaned_keys.items():
+        if key in seen_keys:
+            other_name = seen_keys[key]
+            raise ValueError(f"Duplicate hotkey detected: '{key}' is assigned to both '{other_name}' and '{name}'.")
+        seen_keys[key] = name
+
+def _refresh_input_device_fingerprint(payload):
+    """Keep the stored microphone fingerprint in sync with the selected index.
+
+    The settings UI submits only the numeric input_device_index; the
+    fingerprint is what survives index churn, so it is (re)captured here
+    whenever the selection changes. A fingerprint for an unchanged selection
+    is left alone — the device may simply be unplugged at save time, and its
+    fingerprint is exactly what lets us find it again later."""
+    index = payload.get("input_device_index", -1)
+    if not isinstance(index, int) or index < 0:
+        payload["input_device_fingerprint"] = {}
+        return
+    current = payload.get("input_device_fingerprint")
+    if isinstance(current, dict) and current.get("name") and current.get("last_known_index") == index:
+        return
+    try:
+        from backend.audio.audio_device_resolver import build_input_device_fingerprint
+
+        fingerprint = build_input_device_fingerprint(index)
+    except Exception as exc:
+        logging.warning(f"Input device fingerprint capture failed: {exc}")
+        fingerprint = None
+    # A changed selection that can't be fingerprinted (headless, device just
+    # vanished) clears the old fingerprint rather than mislabeling the new pick.
+    payload["input_device_fingerprint"] = fingerprint or {}
+
+
+def save_profile(profile_name, data):
+    """Saves data to a profile yaml file atomically with a backup."""
+    profiles_dir = get_profiles_dir()
+    profile_name = _safe_profile_filename(profile_name)
+    file_path = os.path.join(profiles_dir, f"{profile_name}.yaml")
+    
+    try:
+        payload = copy.deepcopy(data) if isinstance(data, dict) else {}
+        defaults = _profile_defaults()
+        _migrate_controller_binding(payload)
+        _migrate_output_delivery(payload)
+        audio_schema.migrate_audio_settings(payload)
+        audio_schema.project_legacy_audio_keys(payload)
+        _sanitize_profile_values(payload, defaults)
+        _refresh_input_device_fingerprint(payload)
+        payload["schema_version"] = _PROFILE_SCHEMA_VERSION
+
+        # Validate values strictly
+        validate_profile_settings(payload)
+        
+        # Create backup before writing
+        if os.path.exists(file_path):
+            backup_path = file_path + ".bak"
+            try:
+                shutil.copy2(file_path, backup_path)
+            except Exception as e:
+                logging.warning(f"Failed to create backup for {profile_name}: {e}")
+                
+        # Atomic save: write to temp first, load to verify, then replace
+        temp_path = file_path + ".tmp"
+        with open(temp_path, "w") as f:
+            yaml.dump(payload, f)
+        
+        # Validation load check
+        with open(temp_path, "r") as f:
+            yaml.safe_load(f)
+            
+        os.replace(temp_path, file_path)
+        logging.info(f"Saved profile atomically: {profile_name}")
+    except Exception as e:
+        logging.error(f"Failed to save profile {profile_name}: {e}")
+        raise
+
+def list_profiles():
+    """Returns a list of all available profile names."""
+    profiles_dir = get_profiles_dir()
+    files = [f for f in os.listdir(profiles_dir) if f.endswith(".yaml")]
+    names = [os.path.splitext(f)[0] for f in files]
+    
+    if "Default" not in names:
+        load_profile("Default") # Forces creation
+        names.append("Default")
+        
+    return sorted(names) # Return sorted list
+
+def setup_logging(level=logging.DEBUG):
+    """Redirects logs to debug.log in the User Data directory."""
+    log_dir = get_user_data_path()
+    log_file = os.path.join(log_dir, "debug.log")
+    
+    # Map string level to logging constant if needed
+    if isinstance(level, str):
+        level = getattr(logging, level.upper(), logging.DEBUG)
+
+    logging.basicConfig(
+        level=level,
+        filename=log_file,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        filemode='a'
+    )
+    # Bearer tokens, token= query parameters and key-shaped strings never reach
+    # debug.log, whichever logger wrote them (Phase 0 item 10).
+    from backend.privacy.secret_scrub import install_log_redaction
+    install_log_redaction()
+
+    # Catch uncaught exceptions
+    def handle_exception(exc_type, exc_value, exc_traceback):
+        if issubclass(exc_type, KeyboardInterrupt):
+            sys.__excepthook__(exc_type, exc_value, exc_traceback)
+            return
+        logging.critical("Uncaught exception", exc_info=(exc_type, exc_value, exc_traceback))
+
+    sys.excepthook = handle_exception
+    logging.info(f"App started.")
+    logging.info(f"App Path (Read-Only): {get_app_path()}")
+    logging.info(f"User Data Path (Writable): {get_user_data_path()}")

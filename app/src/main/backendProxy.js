@@ -52,6 +52,9 @@ const ROUTE_ALLOWLIST = {
     '/drafts', '/drafts/latest',
     '/wake/status', '/wake/models', '/wake/models/:id/download-state',
     '/wake/train/status',
+    // Wake Enrollment Wave 0: read-only local hardware/runtime inspection.
+    // No model download, generation, or arbitrary TTS route is exposed.
+    '/wake/qwen/capability',
     '/message-rescue/context', '/message-rescue/generate/:id',
     // Contacts (Stage 11). User-authored records of how to speak to someone --
     // no addresses, no handles, nothing to reach anyone with.
@@ -78,8 +81,12 @@ const ROUTE_ALLOWLIST = {
     // main-process global-hotkey action that captures another application's
     // selection; renderer code must not be able to trigger that side effect
     // through the generic proxy.
+    // `/runtime/primary-action` is NOT here (Phase 0 item 3): it can place a draft
+    // into another application, so it is reachable only through the typed
+    // `backend:primary-action` channel, where the approval broker shows the exact
+    // text in a native dialog and signs the approval.
     '/runtime/audio-devices/refresh', '/runtime/warmup',
-    '/runtime/primary-action', '/runtime/emergency-stop',
+    '/runtime/emergency-stop',
     '/runtime/recording/toggle',
     '/runtime/recording/start', '/runtime/recording/stop',
     '/settings/profiles', '/settings/profiles/import',
@@ -99,9 +106,14 @@ const ROUTE_ALLOWLIST = {
     '/personas/refine', '/personas/draft',
     '/personas/interview/start', '/personas/interview/answer',
     '/personas/compile', '/personas/test-suite/run',
-    '/personas/:name/examples',
+    // POST /personas/:name/examples is NOT here (Phase 0 item 1): teaching a persona
+    // an example needs the person's approval, minted only by the approval broker
+    // (typed channel `approvals:persona-example`).
     '/voice-presets', '/voice-presets/:name/make-default',
     '/wake/enable', '/wake/disable', '/wake/test', '/wake/train',
+    // Pure text preflight only. The route receives the proposed phrase and
+    // vocabularies; it cannot record audio, download Qwen, or generate speech.
+    '/wake/phrase/preflight',
     '/wake/models/:id/download',
     '/message-rescue/context/selection', '/message-rescue/context/manual',
     '/message-rescue/generate', '/message-rescue/generate/:id/cancel',
@@ -117,10 +129,12 @@ const ROUTE_ALLOWLIST = {
     '/library/drafts/:id/reopen', '/library/drafts/:id/resend',
     '/library/drafts/:id/restore', '/library/recordings/:id/restore',
     '/library/clear',
-    // Wave 9. compile writes nothing; save always stores unapproved; approve
-    // records the exact preview lines the user read; run is the gate, and
-    // run/record files the per-step status codes.
-    '/workflows/compile', '/workflows/save', '/workflows/approve',
+    // Wave 9. compile writes nothing; save always stores unapproved; run is the
+    // gate, and run/record files the per-step status codes. `/workflows/approve`
+    // is NOT here (Phase 0 item 1): approval is a native dialog shown by the main
+    // process and a signed ticket the backend verifies (approvalBroker.js, typed
+    // channel `approvals:workflow`); a renderer cannot approve by calling it.
+    '/workflows/compile', '/workflows/save',
     '/workflows/enable', '/workflows/delete',
     '/workflows/run', '/workflows/run/record',
     // Wave 10. `/input/dispatch` is here because the SETUP UI needs it: the
@@ -143,8 +157,12 @@ const ROUTE_ALLOWLIST = {
     '/recordings/:id', '/recordings',
     '/history', '/drafts',
     '/dictionary/:term', '/macros/:trigger',
-    '/voice-presets/:name', '/voice-presets-default', '/personas/:name',
-    '/personas/:name/examples/:example_id', '/personas/:name/examples',
+    '/voice-presets/:name', '/voice-presets-default',
+    // NOT here (round 3, item 3; round 4, item 3): DELETE /personas/:name (deleting a persona
+    // removes its few-shot list), DELETE /personas/:name/examples (clearing its learned examples)
+    // and DELETE /personas/:name/examples/:example_id. Each changes what a persona learns from, so
+    // each goes only through the approval broker's native dialog (typed channels
+    // approvals:persona-delete, approvals:persona-learned-clear, approvals:persona-learned-delete).
     '/wake/models/:id',
     '/message-rescue/context',
     '/contacts/:id',
@@ -152,6 +170,21 @@ const ROUTE_ALLOWLIST = {
   ],
 };
 const ALLOWED_METHODS = new Set(Object.keys(ROUTE_ALLOWLIST));
+
+// The review overlay is a small always-on-top window that handles one draft. Round 2, item 7:
+// it used to get the dashboard's whole proxy (profile and persona writes, workflow mutation,
+// privacy routes...). It now reaches exactly the routes review-overlay.html calls: read the
+// output settings and TTS status, stop speech, and edit / accept / decline / rewrite / read
+// aloud the draft it is showing. Anything else is refused for that window.
+const REVIEW_ROUTE_ALLOWLIST = {
+  GET: ['/runtime/output-settings', '/runtime/tts-status'],
+  POST: [
+    '/tts/stop',
+    '/drafts/:id/edit', '/drafts/:id/accept', '/drafts/:id/decline',
+    '/drafts/:id/rewrite', '/drafts/:id/tts',
+  ],
+};
+const ROUTE_PROFILES = { dashboard: ROUTE_ALLOWLIST, review: REVIEW_ROUTE_ALLOWLIST };
 // One URL-encoded path segment: the characters encodeURIComponent can emit.
 const PARAM_SEGMENT = /^[A-Za-z0-9._~%!'()*-]{1,256}$/;
 const MAX_BODY_BYTES = 8 * 1024 * 1024; // 8 MB (covers voice-sample uploads)
@@ -181,8 +214,12 @@ function _matchesRoute(pattern, routePart) {
   );
 }
 
-function _validateRequest(method, path) {
-  if (!ALLOWED_METHODS.has(method)) {
+function _validateRequest(method, path, profile = 'dashboard') {
+  const table = ROUTE_PROFILES[profile];
+  if (!table) {
+    return `unknown route profile ${String(profile)}`;
+  }
+  if (!ALLOWED_METHODS.has(method) || !table[method]) {
     return `method ${method} not allowed`;
   }
   if (typeof path !== 'string' || path.length === 0 || path.length > MAX_PATH_LEN) {
@@ -195,7 +232,7 @@ function _validateRequest(method, path) {
     return 'path must not contain a scheme, traversal, or backslash';
   }
   const routePart = path.split('?', 1)[0];
-  if (!ROUTE_ALLOWLIST[method].some((pattern) => _matchesRoute(pattern, routePart))) {
+  if (!table[method].some((pattern) => _matchesRoute(pattern, routePart))) {
     return `${method} ${routePart} is not an allowed backend route`;
   }
   return null;
@@ -205,9 +242,9 @@ function _validateRequest(method, path) {
 // where body is parsed JSON (or the raw text if not JSON). Never throws for
 // HTTP errors — the renderer inspects ok/status — but returns
 // { ok:false, error } for validation/transport faults.
-async function request({ method, path, body, timeoutMs } = {}) {
+async function request({ method, path, body, timeoutMs, profile = 'dashboard' } = {}) {
   const upperMethod = String(method || 'GET').toUpperCase();
-  const requestError = _validateRequest(upperMethod, path);
+  const requestError = _validateRequest(upperMethod, path, profile);
   if (requestError) {
     return { ok: false, status: 0, error: requestError };
   }
@@ -300,44 +337,12 @@ function sendDraft({ id, action, openChat, allowResend, timeoutMs } = {}) {
   }, timeoutMs);
 }
 
-const WIPE_MODES = new Set(['clear_conversations', 'clear_personal_data', 'factory_reset']);
-
-function wipePrivacyData({ wipeVoices, confirm, mode, timeoutMs } = {}) {
-  // An unrecognised mode is refused here rather than forwarded. The backend
-  // rejects it too, but a mode is the difference between deleting drafts and
-  // deleting someone's personas, so a typo must not travel.
-  const requested = typeof mode === 'string' && mode ? mode : 'clear_conversations';
-  if (!WIPE_MODES.has(requested)) {
-    return _fault(`wipePrivacyData: unknown wipe mode ${requested}`);
-  }
-  return _requireConfirm({ confirm })
-    || _send('POST', '/privacy/wipe', {
-      wipe_voices: Boolean(wipeVoices),
-      mode: requested,
-    }, timeoutMs);
-}
-
-function clearPersonaLearning({ confirm, timeoutMs } = {}) {
-  // Typed rather than an allowlisted DELETE: this erases every approved
-  // raw-to-final example -- the user's own sentences on both sides -- so it
-  // goes through the same confirmed-operation gate as the other destructive
-  // routes rather than the generic proxy.
-  return _requireConfirm({ confirm })
-    || _send('DELETE', '/privacy/persona-learning', undefined, timeoutMs);
-}
-
-function factoryReset({ confirm, deleteDownloadedModels, timeoutMs } = {}) {
-  // Deliberately NOT _requireConfirm's boolean gate: the backend demands an
-  // exact phrase and this forwards it verbatim, so a stray `true` in a caller
-  // cannot erase an install. A non-string is refused before it leaves here.
-  if (typeof confirm !== 'string' || !confirm) {
-    return _fault('factoryReset: confirmation phrase required');
-  }
-  return _send('POST', '/privacy/factory-reset', {
-    confirm,
-    delete_downloaded_models: Boolean(deleteDownloadedModels),
-  }, timeoutMs);
-}
+// The privacy wipes, the factory reset and the global learned-example clear are NOT typed
+// operations here any more (round 4, item 3). Each deletes learned persona examples, and the
+// renderer's `confirm: true` (or the typed phrase alone) was the whole gate -- a value a
+// compromised page supplies itself. They now go only through the approval broker
+// (approvalBroker.wipePrivacy / factoryReset / clearAllLearning), which shows the scope in a
+// native dialog and signs a ticket the backend verifies.
 
 function deleteLlmModel({ modelId, confirm, timeoutMs } = {}) {
   if (typeof modelId !== 'string' || !ID_SEGMENT.test(modelId)) {
@@ -451,6 +456,22 @@ let _reconnectTimer = null;
 let _wsClosedByUser = false;
 let _wsAttempt = 0;
 
+// Main-side listeners for backend status events (round 2, item 6: spoken requests). The
+// renderer gets the same frames; this lets MAIN react to "a tap is needed" without trusting the
+// page to relay it.
+const _eventListeners = new Set();
+function onBackendEvent(listener) {
+  if (typeof listener !== 'function') return () => {};
+  _eventListeners.add(listener);
+  return () => _eventListeners.delete(listener);
+}
+function _notifyEventListeners(message) {
+  if (!message || typeof message !== 'object') return;
+  for (const listener of _eventListeners) {
+    try { listener(message); } catch (_e) { /* a listener must never break the socket */ }
+  }
+}
+
 function _wsUrl() {
   return `${_origin.replace(/^http/, 'ws')}/ws/voice_status`;
 }
@@ -487,7 +508,9 @@ function _connectWs() {
       return;
     }
     try {
-      _sendToRenderer('backend:voice-status:message', typeof data === 'string' ? JSON.parse(data) : data);
+      const message = typeof data === 'string' ? JSON.parse(data) : data;
+      _notifyEventListeners(message);
+      _sendToRenderer('backend:voice-status:message', message);
     } catch (_e) {
       // ignore unparseable frames
     }
@@ -526,9 +549,20 @@ function stopVoiceStatus() {
   _wsBoundSender = null;
 }
 
+// For OTHER MAIN-PROCESS modules only (the approval broker): the same transport
+// with the token attached, but the caller names the route. It is never wired to an
+// IPC channel, so a renderer cannot reach a route the allowlist refuses by going
+// through it.
+function sendTrusted(method, path, body, timeoutMs) {
+  return _send(String(method).toUpperCase(), path, body, timeoutMs);
+}
+
 module.exports = {
   init,
   request,
+  sendTrusted,
+  onBackendEvent,
+  _notifyEventListeners,
   uploadVoiceSample,
   uploadWakeModel,
   startVoiceStatus,
@@ -536,9 +570,6 @@ module.exports = {
   // typed operations (each bound to one exact method + route)
   fetchHealth,
   sendDraft,
-  wipePrivacyData,
-  factoryReset,
-  clearPersonaLearning,
   deleteLlmModel,
   deleteWhisperModel,
   deleteVoice,
@@ -546,5 +577,6 @@ module.exports = {
   // exported for unit tests
   _validateRequest,
   ROUTE_ALLOWLIST,
+  REVIEW_ROUTE_ALLOWLIST,
   ALLOWED_METHODS,
 };

@@ -214,7 +214,7 @@ def test_the_store_filename_is_the_one_declared_to_data_categories():
 
 
 def test_default_path_lands_under_the_unified_root(monkeypatch, tmp_path):
-    import utils
+    from backend.config import utils
 
     monkeypatch.setattr(utils, "get_user_data_path", lambda: str(tmp_path))
     assert sd.StreamDeckConfigStore().path == os.path.join(str(tmp_path), sd.STORE_FILENAME)

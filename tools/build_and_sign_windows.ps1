@@ -3,10 +3,11 @@ param(
     [string]$PythonPath = "",
     [string]$SignToolPath = "",
     [string]$DlibPath = "",
-    [string]$ExpectedSignerSubject = "",
+    [string]$ExpectedSignerSubject = "CN=Donaven Crenshaw, O=Donaven Crenshaw, L=Kingfisher, S=ok, C=US",
     [string]$CorrelationId = "",
     [switch]$SkipNodeInstall,
-    [switch]$SkipUnitTests
+    [switch]$SkipUnitTests,
+    [switch]$UsePreparedPayload
 )
 
 $ErrorActionPreference = "Stop"
@@ -15,6 +16,9 @@ Set-StrictMode -Version Latest
 if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
     throw "The signed BetterFingers Windows build must run on Windows."
 }
+if ([string]::IsNullOrWhiteSpace($ExpectedSignerSubject)) {
+    throw "ExpectedSignerSubject must name the exact verified certificate subject."
+}
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $appRoot = Join-Path $repoRoot "app"
@@ -22,6 +26,8 @@ $signingScript = Join-Path $PSScriptRoot "sign_windows_artifacts.ps1"
 $releaseRoot = Join-Path $appRoot "release"
 $hookReportRoot = Join-Path $releaseRoot ".artifact-signing-hook-reports"
 $finalReportPath = Join-Path $hookReportRoot "final-output-verification.json"
+$backendBuildPayloadReportPath = Join-Path $hookReportRoot "backend-build-payload-verification.json"
+$packagedNativePayloadReportPath = Join-Path $hookReportRoot "packaged-native-payload-verification.json"
 $combinedReportPath = Join-Path $releaseRoot "BetterFingers-Windows-signing-report.json"
 
 function Invoke-CheckedCommand {
@@ -56,6 +62,86 @@ function Restore-EnvironmentSnapshot {
             Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue
         } else {
             Set-Item -LiteralPath "Env:$name" -Value $Snapshot[$name]
+        }
+    }
+}
+
+function Get-NativePayloadPaths {
+    param(
+        [string]$RootPath,
+        [string]$Label
+    )
+
+    if (-not (Test-Path -LiteralPath $RootPath -PathType Container)) {
+        throw "$Label root was not found: $RootPath"
+    }
+    $paths = @(Get-ChildItem -LiteralPath $RootPath -File -Recurse |
+        Where-Object { @(".exe", ".dll", ".pyd", ".node") -contains $_.Extension.ToLowerInvariant() } |
+        ForEach-Object { $_.FullName } |
+        Sort-Object -Unique)
+    if ($paths.Count -eq 0) {
+        throw "$Label contained no EXE, DLL, PYD, or NODE payload files: $RootPath"
+    }
+    return $paths
+}
+
+function Get-RelativeArtifactMap {
+    param(
+        [string]$RootPath,
+        [object[]]$Artifacts,
+        [string]$Label
+    )
+
+    $resolvedRoot = (Resolve-Path -LiteralPath $RootPath).Path
+    $rootPrefix = $resolvedRoot.TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar) +
+        [IO.Path]::DirectorySeparatorChar
+    $recordsByRelativePath = @{}
+    foreach ($artifact in $Artifacts) {
+        $artifactPath = [string]$artifact.path
+        $resolvedArtifactPath = (Resolve-Path -LiteralPath $artifactPath).Path
+        if (-not $resolvedArtifactPath.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "$Label report contained an artifact outside '$resolvedRoot': $resolvedArtifactPath"
+        }
+        $relativePath = $resolvedArtifactPath.Substring($rootPrefix.Length).Replace('\', '/')
+        if ($recordsByRelativePath.ContainsKey($relativePath)) {
+            throw "$Label report contained duplicate relative path '$relativePath'."
+        }
+        $recordsByRelativePath[$relativePath] = $artifact
+    }
+    return $recordsByRelativePath
+}
+
+function Assert-IdenticalArtifactMaps {
+    param(
+        [hashtable]$BuildArtifacts,
+        [hashtable]$PackagedArtifacts
+    )
+
+    if ($BuildArtifacts.Count -ne $PackagedArtifacts.Count) {
+        throw "Backend native payload changed during packaging: build count $($BuildArtifacts.Count), packaged count $($PackagedArtifacts.Count)."
+    }
+    $identityFields = @(
+        "sha256",
+        "signerSubject",
+        "signerThumbprint",
+        "timestampSubject",
+        "timestampThumbprint"
+    )
+    foreach ($relativePath in $BuildArtifacts.Keys) {
+        if (-not $PackagedArtifacts.ContainsKey($relativePath)) {
+            throw "Backend native payload '$relativePath' was omitted during packaging."
+        }
+        foreach ($field in $identityFields) {
+            $buildProperty = $BuildArtifacts[$relativePath].PSObject.Properties[$field]
+            $packagedProperty = $PackagedArtifacts[$relativePath].PSObject.Properties[$field]
+            if ($null -eq $buildProperty -or $null -eq $packagedProperty) {
+                throw "Backend payload reports omitted required identity field '$field' for '$relativePath'."
+            }
+            $buildValue = [string]$buildProperty.Value
+            $packagedValue = [string]$packagedProperty.Value
+            if ($buildValue -cne $packagedValue) {
+                throw "Backend native payload '$relativePath' changed '$field' during packaging."
+            }
         }
     }
 }
@@ -128,14 +214,52 @@ try {
 
     Push-Location $appRoot
     try {
-        if (-not $SkipNodeInstall) {
+        if (-not $UsePreparedPayload -and -not $SkipNodeInstall) {
             Invoke-CheckedCommand -Command "npm" -Arguments @("ci") -FailureMessage "npm dependency installation failed"
         }
-        if (-not $SkipUnitTests) {
+        if (-not $UsePreparedPayload -and -not $SkipUnitTests) {
             Invoke-CheckedCommand -Command "npm" -Arguments @("run", "test:unit") -FailureMessage "app unit tests failed"
         }
-        Invoke-CheckedCommand -Command "npm" -Arguments @("run", "build") -FailureMessage "renderer/main build failed"
-        Invoke-CheckedCommand -Command "npm" -Arguments @("run", "build:backend") -FailureMessage "Windows backend build failed"
+        if (-not $UsePreparedPayload) {
+            Invoke-CheckedCommand -Command "npm" -Arguments @("run", "build") -FailureMessage "renderer/main build failed"
+            Invoke-CheckedCommand -Command "npm" -Arguments @("run", "build:backend") -FailureMessage "Windows backend build failed"
+        }
+
+        $backendBuildBundlePath = Join-Path $appRoot "resources\backend\betterfingers-backend"
+        $backendBuildExecutablePath = Join-Path $backendBuildBundlePath "betterfingers-backend.exe"
+        if (-not (Test-Path -LiteralPath $backendBuildBundlePath -PathType Container) -or
+            -not (Test-Path -LiteralPath $backendBuildExecutablePath -PathType Leaf)) {
+            throw "Expected PyInstaller onedir backend was not produced at $backendBuildExecutablePath."
+        }
+        $backendBuildNativePayloadPaths = @(Get-NativePayloadPaths `
+            -RootPath $backendBuildBundlePath `
+            -Label "Backend build bundle")
+
+        # PyInstaller onedir keeps native modules visible. Sign every unsigned
+        # EXE/DLL/PYD before electron-builder copies the payload, while keeping
+        # already-valid Microsoft/vendor signatures intact.
+        $backendSignParameters = @{
+            Path = $backendBuildNativePayloadPaths
+            ReportPath = $backendBuildPayloadReportPath
+            CorrelationId = "$CorrelationId/backend-build-payload"
+            PreserveValidSignatures = $true
+            SkipAzureCliPreflight = $true
+        }
+        if (-not [string]::IsNullOrWhiteSpace($SignToolPath)) {
+            $backendSignParameters.SignToolPath = $SignToolPath
+        }
+        if (-not [string]::IsNullOrWhiteSpace($DlibPath)) {
+            $backendSignParameters.DlibPath = $DlibPath
+        }
+        if (-not [string]::IsNullOrWhiteSpace($ExpectedSignerSubject)) {
+            $backendSignParameters.ExpectedSignerSubject = $ExpectedSignerSubject
+        }
+        try {
+            & $signingScript @backendSignParameters
+        } catch {
+            throw "backend native-payload signing failed: $($_.Exception.Message)"
+        }
+
         Invoke-CheckedCommand -Command "npx" -Arguments @(
             "electron-builder", "--config", "electron-builder.config.cjs", "--win", "--x64", "--publish", "never"
         ) -FailureMessage "signed Windows packaging failed"
@@ -148,6 +272,13 @@ try {
     $releaseChannel = if ($packageVersion -match "-") { "alpha" } else { "latest" }
     $updateMetadataPath = Join-Path $releaseRoot "$releaseChannel.yml"
     $blockmapPath = "$installerPath.blockmap"
+    $updaterConfigPath = Join-Path $releaseRoot "win-unpacked\resources\app-update.yml"
+    $publisherIdentity = "CN=Donaven Crenshaw, O=Donaven Crenshaw, C=US"
+    $updaterConfig = Get-Content -Raw -LiteralPath $updaterConfigPath
+    $publisherPattern = '(?m)^publisherName:\s*\r?\n\s+-\s*[''"]?{0}[''"]?\s*$' -f [regex]::Escape($publisherIdentity)
+    if ($updaterConfig -notmatch $publisherPattern) {
+        throw "Packaged app-update.yml is missing the exact approved publisherName pin."
+    }
     $checksumPath = "$installerPath.sha256"
     $unpackedPath = Join-Path $releaseRoot "win-unpacked"
     if (-not (Test-Path -LiteralPath $installerPath -PathType Leaf)) {
@@ -186,7 +317,8 @@ try {
     "$installerSha256  $installerName" | Out-File -LiteralPath $checksumPath -Encoding ascii
 
     $applicationPath = Join-Path $unpackedPath "BetterFingers.exe"
-    $backendPath = Join-Path $unpackedPath "resources\backend\betterfingers-backend.exe"
+    $packagedBackendBundlePath = Join-Path $unpackedPath "resources\backend\betterfingers-backend"
+    $backendPath = Join-Path $packagedBackendBundlePath "betterfingers-backend.exe"
     $finalOutputPaths = @($installerPath, $applicationPath, $backendPath)
     foreach ($finalOutputPath in $finalOutputPaths) {
         if (-not (Test-Path -LiteralPath $finalOutputPath -PathType Leaf)) {
@@ -214,16 +346,54 @@ try {
         throw "final SignTool verification failed: $($_.Exception.Message)"
     }
 
+    $packagedNativePayloadPaths = @(Get-NativePayloadPaths `
+        -RootPath $unpackedPath `
+        -Label "Packaged application tree")
+    $packagedVerifyParameters = @{
+        Path = $packagedNativePayloadPaths
+        ReportPath = $packagedNativePayloadReportPath
+        VerifyOnly = $true
+        PreserveValidSignatures = $true
+    }
+    if (-not [string]::IsNullOrWhiteSpace($SignToolPath)) {
+        $packagedVerifyParameters.SignToolPath = $SignToolPath
+    }
+    try {
+        & $signingScript @packagedVerifyParameters
+    } catch {
+        throw "packaged application native-payload verification failed: $($_.Exception.Message)"
+    }
+
+    $excludedVerificationReports = @(
+        $finalReportPath,
+        $backendBuildPayloadReportPath,
+        $packagedNativePayloadReportPath
+    )
     $hookReports = @(Get-ChildItem -LiteralPath $hookReportRoot -Filter "*.json" -File |
-        Where-Object { $_.FullName -cne $finalReportPath } |
+        Where-Object { $excludedVerificationReports -notcontains $_.FullName } |
         Sort-Object Name |
         ForEach-Object { Get-Content -Raw -LiteralPath $_.FullName | ConvertFrom-Json })
     if ($hookReports.Count -eq 0) {
         throw "electron-builder produced no per-artifact signing verification reports."
     }
     $finalReport = Get-Content -Raw -LiteralPath $finalReportPath | ConvertFrom-Json
+    $backendBuildPayloadReport = Get-Content -Raw -LiteralPath $backendBuildPayloadReportPath | ConvertFrom-Json
+    $packagedNativePayloadReport = Get-Content -Raw -LiteralPath $packagedNativePayloadReportPath | ConvertFrom-Json
     $hookArtifacts = @($hookReports | ForEach-Object { $_.artifacts } | ForEach-Object { $_ })
+    foreach ($requiredName in @("BetterFingers.exe", (Split-Path -Leaf $installerPath), "*.__uninstaller.exe")) {
+        $matchingHooks = @($hookArtifacts | Where-Object {
+            (Split-Path -Leaf ([string]$_.path)) -like $requiredName -and
+            [string]$_.verificationDisposition -eq "signed" -and
+            [string]$_.signerSubject -ceq $ExpectedSignerSubject -and
+            -not [string]::IsNullOrWhiteSpace([string]$_.timestampSubject)
+        })
+        if ($matchingHooks.Count -eq 0) {
+            throw "Missing signed, timestamped hook verification for '$requiredName'."
+        }
+    }
     $finalArtifacts = @($finalReport.artifacts)
+    $backendBuildPayloadArtifacts = @($backendBuildPayloadReport.artifacts)
+    $packagedNativePayloadArtifacts = @($packagedNativePayloadReport.artifacts)
     if ($finalArtifacts.Count -ne $finalOutputPaths.Count) {
         throw "Expected $($finalOutputPaths.Count) BetterFingers final-output verification records; observed $($finalArtifacts.Count)."
     }
@@ -235,16 +405,57 @@ try {
         }
     }
 
+    if ([string]$backendBuildPayloadReport.operation -cne "sign-and-verify" -or
+        $backendBuildPayloadReport.classificationComplete -ne $true) {
+        throw "Backend build verification report did not contain a complete signing/preservation classification."
+    }
+    if ([string]$packagedNativePayloadReport.operation -cne "verify-only" -or
+        $packagedNativePayloadReport.classificationComplete -ne $false) {
+        throw "Packaged native-payload report did not identify itself as verify-only evidence."
+    }
+    if ($packagedNativePayloadArtifacts.Count -ne $packagedNativePayloadPaths.Count) {
+        throw "Expected $($packagedNativePayloadPaths.Count) packaged application native signature records; observed $($packagedNativePayloadArtifacts.Count)."
+    }
+    $reportedPackagedPayloadPaths = @($packagedNativePayloadArtifacts | ForEach-Object { [string]$_.path })
+    foreach ($payloadPath in $packagedNativePayloadPaths) {
+        $resolvedPayloadPath = (Resolve-Path -LiteralPath $payloadPath).Path
+        if ($reportedPackagedPayloadPaths -cnotcontains $resolvedPayloadPath) {
+            throw "Packaged application verification report omitted '$resolvedPayloadPath'."
+        }
+    }
+
+    $packagedBackendRoot = (Resolve-Path -LiteralPath $packagedBackendBundlePath).Path
+    $packagedBackendPrefix = $packagedBackendRoot.TrimEnd(
+        [IO.Path]::DirectorySeparatorChar,
+        [IO.Path]::AltDirectorySeparatorChar
+    ) + [IO.Path]::DirectorySeparatorChar
+    $backendPackagedPayloadArtifacts = @($packagedNativePayloadArtifacts |
+        Where-Object {
+            ([string]$_.path).StartsWith($packagedBackendPrefix, [StringComparison]::OrdinalIgnoreCase)
+        })
+    $backendBuildArtifactMap = Get-RelativeArtifactMap `
+        -RootPath $backendBuildBundlePath `
+        -Artifacts $backendBuildPayloadArtifacts `
+        -Label "Backend build"
+    $backendPackagedArtifactMap = Get-RelativeArtifactMap `
+        -RootPath $packagedBackendBundlePath `
+        -Artifacts $backendPackagedPayloadArtifacts `
+        -Label "Packaged backend"
+    Assert-IdenticalArtifactMaps `
+        -BuildArtifacts $backendBuildArtifactMap `
+        -PackagedArtifacts $backendPackagedArtifactMap
+
     $subjects = @($finalArtifacts |
         ForEach-Object { [string]$_.signerSubject } |
         Sort-Object -Unique)
     if ($subjects.Count -ne 1 -or [string]::IsNullOrWhiteSpace($subjects[0])) {
         throw "Expected one common signer subject across BetterFingers-owned final outputs; observed: $($subjects -join '; ')."
     }
-    $buildTimeSignerSubjects = @($hookArtifacts |
+    $buildTimeArtifacts = @($hookArtifacts + $backendBuildPayloadArtifacts)
+    $buildTimeSignerSubjects = @($buildTimeArtifacts |
         ForEach-Object { [string]$_.signerSubject } |
         Sort-Object -Unique)
-    $vendorPresignedArtifacts = @($hookArtifacts |
+    $vendorPresignedArtifacts = @($buildTimeArtifacts |
         Where-Object { [string]$_.signerSubject -cne $subjects[0] })
 
     $combinedReport = [ordered]@{
@@ -259,6 +470,9 @@ try {
         signerSubject = $subjects[0]
         verifiedAtUtc = [DateTime]::UtcNow.ToString("o")
         buildTimeVerifications = $hookArtifacts
+        backendBuildPayloadVerifications = $backendBuildPayloadArtifacts
+        backendPackagedPayloadVerifications = $backendPackagedPayloadArtifacts
+        packagedNativePayloadVerifications = $packagedNativePayloadArtifacts
         buildTimeSignerSubjects = $buildTimeSignerSubjects
         vendorPresignedArtifacts = $vendorPresignedArtifacts
         finalOutputVerifications = $finalArtifacts

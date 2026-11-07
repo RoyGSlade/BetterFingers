@@ -19,10 +19,15 @@ having it stay approved would mean the user approved a preview that no longer
 describes what runs.
 
 *Approval is bound to the exact preview.* ``approve`` records the preview lines
-the user actually read, and ``can_run`` refuses when the current preview differs
-from them. That covers the case nobody clicks through: the workflow is
-untouched, but the application it names was re-confirmed with a different launch
-method, so the approved words and the real behaviour have quietly diverged.
+the user actually read AND the SHA-256 of the complete canonical preview
+(``approvals.preview_digest``), and ``can_run`` refuses when the digest of the
+current preview differs. That covers the case nobody clicks through: the workflow
+is untouched, but the application it names was re-confirmed with a different
+launch method, so the approved words and the real behaviour have quietly
+diverged. Nothing is truncated on this path: an earlier version cut every line at
+240 characters before comparing, so two previews that differed only past that
+point compared equal and a changed launch target ran as approved (Phase 0 item 2).
+A preview too large to hold is REFUSED, never clipped.
 
 *Enabled and approved are separate.* A workflow can be saved disabled (the
 default) and enabled later; an enabled workflow that has never been approved
@@ -41,6 +46,7 @@ dropped.
 
 from __future__ import annotations
 
+import hmac
 import json
 import threading
 import time
@@ -56,7 +62,9 @@ from backend.services.action_validator import (
     STATUS_FAILED,
     STEP_STATUS_CODES,
 )
-from store_migration import load_versioned_store, write_atomic
+from backend.config.store_migration import load_versioned_store, write_atomic
+from backend.services import approvals
+from backend.services.approvals import preview_digest, steps_digest
 
 # Schema history:
 #   v1 (current): {"schema_version": 1, "workflows": {id: <record>},
@@ -75,6 +83,8 @@ RECORD_FIELDS = (
     "enabled",
     "approved",
     "approved_preview",
+    "approved_preview_sha256",
+    "approval_via",
     "updated_at",
 )
 
@@ -83,7 +93,14 @@ RUN_FIELDS = ("workflow_id", "at", "status", "completed", "total", "steps")
 
 DEFAULT_CAP = 50
 DEFAULT_HISTORY_CAP = 100
-MAX_PREVIEW_LINE_LEN = 240
+# Ceilings that REFUSE an oversized preview. They are not truncation points: a
+# preview over either limit cannot be approved (and a current preview over them
+# can never match an approved one), so nothing is ever compared on a clipped copy.
+MAX_PREVIEW_LINES = 200
+MAX_PREVIEW_LINE_CHARS = 8000
+# Who may have granted an approval. Records that predate the signed-approval
+# broker carry no such marker and are demoted to unapproved on load.
+APPROVAL_VIA = "native_dialog"
 
 
 def _empty_store() -> dict:
@@ -95,9 +112,14 @@ def _now() -> float:
 
 
 def _clean_preview(value) -> list:
+    """The preview as a list of strings, COMPLETE. No clipping, no line cap."""
     if not isinstance(value, (list, tuple)):
         return []
-    return [str(line)[:MAX_PREVIEW_LINE_LEN] for line in value][:64]
+    return [str(line) for line in value]
+
+
+def preview_too_large(lines) -> bool:
+    return len(lines) > MAX_PREVIEW_LINES or any(len(line) > MAX_PREVIEW_LINE_CHARS for line in lines)
 
 
 def _coerce_record(raw) -> Optional[dict]:
@@ -117,11 +139,25 @@ def _coerce_record(raw) -> Optional[dict]:
     record = dict(result.workflow)
     record["enabled"] = bool(raw.get("enabled", False))
     record["approved"] = bool(raw.get("approved", False))
-    record["approved_preview"] = _clean_preview(raw.get("approved_preview"))
-    # An approval with no recorded preview is not an approval this store can
-    # check, so it is not one it keeps.
-    if not record["approved_preview"]:
-        record["approved"] = False
+    lines = _clean_preview(raw.get("approved_preview"))
+    stored_digest = str(raw.get("approved_preview_sha256") or "")
+    # An approval is kept only if it can be CHECKED: a recorded preview that is
+    # within bounds, whose digest still matches what is on disk, granted through
+    # the broker. A record from before the broker (no marker/digest), a hand-edited
+    # preview, or a digest that no longer matches is not an approval this store
+    # will honour, so the workflow comes back unapproved and must be re-approved.
+    keep = bool(
+        record["approved"]
+        and lines
+        and not preview_too_large(lines)
+        and raw.get("approval_via") == APPROVAL_VIA
+        and stored_digest
+        and hmac.compare_digest(stored_digest, preview_digest(lines))
+    )
+    record["approved"] = keep
+    record["approved_preview"] = lines if keep else []
+    record["approved_preview_sha256"] = stored_digest if keep else ""
+    record["approval_via"] = APPROVAL_VIA if keep else ""
     try:
         record["updated_at"] = float(raw.get("updated_at") or 0.0)
     except (TypeError, ValueError):
@@ -216,7 +252,7 @@ class WorkflowStore:
     def path(self) -> str:
         if self._path is None:
             import os
-            from utils import get_user_data_path
+            from backend.config.utils import get_user_data_path
             self._path = os.path.join(get_user_data_path(), "launcher_workflows.json")
         return self._path
 
@@ -261,7 +297,7 @@ class WorkflowStore:
         conservative-parser rule from ``voice_commands.py`` applies with more
         force to something that opens applications.
         """
-        from voice_commands import normalize_workflow_phrase
+        from backend.commands.voice_commands import normalize_workflow_phrase
 
         needle = normalize_workflow_phrase(phrase)
         if not needle:
@@ -312,6 +348,8 @@ class WorkflowStore:
                 "enabled": bool(enabled),
                 "approved": keep_approval,
                 "approved_preview": list(existing.get("approved_preview", [])) if keep_approval else [],
+                "approved_preview_sha256": existing.get("approved_preview_sha256", "") if keep_approval else "",
+                "approval_via": existing.get("approval_via", "") if keep_approval else "",
                 "updated_at": _now(),
             }
             data["workflows"][record["id"]] = record
@@ -322,22 +360,48 @@ class WorkflowStore:
             return {"ok": True, "workflow": dict(record),
                     "dropped_fields": list(result.dropped_fields)}
 
-    def approve(self, workflow_id, preview_lines) -> dict:
-        """Record that the user read **these exact lines** and said yes."""
+    def approve(self, workflow_id, preview_lines, proof=None) -> dict:
+        """Record that the user read **these exact, complete lines** and said yes.
+
+        ``proof`` must be the ``VerifiedApproval`` that
+        ``approvals.verify(..., purpose="workflow.approve")`` returned for this
+        workflow: a signed ticket from the Electron main process, minted only
+        after a native dialog showed the person the complete preview. Without it
+        nothing is approved, whoever the caller is (Phase 0 item 1) -- including
+        any in-process caller, which is why the check lives here and not only in
+        the HTTP route.
+
+        The lines are stored whole together with their SHA-256; an empty or
+        oversized preview is refused rather than clipped.
+        """
         wid = normalize_workflow_id(workflow_id)
         lines = _clean_preview(preview_lines)
         if not wid:
             return {"ok": False, "error": "invalid_id"}
+        if not approvals.require_verified(proof, purpose=approvals.PURPOSE_WORKFLOW_APPROVE, subject=wid):
+            return {"ok": False, "error": approvals.ERR_REQUIRED, "message": approvals.ApprovalError(approvals.ERR_REQUIRED).message}
         if not lines:
             return {"ok": False, "error": "empty_preview",
                     "message": "There is nothing to approve — the preview is empty."}
+        if preview_too_large(lines):
+            return {"ok": False, "error": "preview_too_large",
+                    "message": "That preview is too long to approve safely. Simplify the workflow."}
         with self._lock:
             data = self._load()
             record = data["workflows"].get(wid)
             if record is None:
                 return {"ok": False, "error": "not_found"}
+            # The ticket was minted for the workflow the person SAW. If its steps
+            # changed between the dialog and now, that approval describes
+            # something that no longer exists.
+            if proof.bind.get("steps_sha256") != steps_digest(record["steps"]) \
+                    or proof.bind.get("preview_sha256") != preview_digest(lines):
+                return {"ok": False, "error": "workflow_changed",
+                        "message": "That workflow changed while you were reviewing it. Review it again."}
             record["approved"] = True
             record["approved_preview"] = lines
+            record["approved_preview_sha256"] = preview_digest(lines)
+            record["approval_via"] = APPROVAL_VIA
             record["updated_at"] = _now()
             try:
                 self._save(data)
@@ -398,7 +462,15 @@ class WorkflowStore:
             return {"ok": False, "error": "not_approved",
                     "reason": "That workflow has not been approved yet, so it cannot run."}
         current = _clean_preview(current_preview_lines)
-        if current != record.get("approved_preview"):
+        # Compare the digest of the COMPLETE current preview with the digest
+        # recorded at approval. A current preview too large to have been
+        # approvable can never match.
+        approved_digest = str(record.get("approved_preview_sha256") or "")
+        if (
+            preview_too_large(current)
+            or not approved_digest
+            or not hmac.compare_digest(preview_digest(current), approved_digest)
+        ):
             return {"ok": False, "error": "preview_changed",
                     "reason": "What this workflow would do has changed since you approved "
                               "it. Review the new steps and approve them before it runs."}

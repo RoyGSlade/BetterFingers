@@ -211,7 +211,7 @@ def test_the_store_filename_is_the_one_declared_to_data_categories():
 
 
 def test_default_path_lands_under_the_unified_root(monkeypatch, tmp_path):
-    import utils
+    from backend.config import utils
 
     monkeypatch.setattr(utils, "get_user_data_path", lambda: str(tmp_path))
     assert cb.ControllerBindingStore().path == os.path.join(str(tmp_path), cb.STORE_FILENAME)
@@ -224,8 +224,8 @@ def test_the_declared_privacy_path_is_the_path_the_stores_actually_use():
     latter is the former plus a mkdir), and if they ever stop being, the privacy
     report points at a file nobody writes and the wipe misses the one that
     exists. Cheap insurance against a silent divergence."""
-    import app_paths
-    import utils
+    from backend.config import app_paths
+    from backend.config import utils
     from backend.stores import stream_deck_config as sd
 
     root = os.path.realpath(str(app_paths.resolve_base()))

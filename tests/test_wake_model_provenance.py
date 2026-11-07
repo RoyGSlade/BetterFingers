@@ -68,7 +68,7 @@ class CatalogSyncTests(unittest.TestCase):
     """The manifest is generated from, and must agree with, the code catalog."""
 
     def setUp(self):
-        import wake_models
+        from backend.wake import wake_models
 
         self.wake_models = wake_models
         self.manifest = load_manifest()

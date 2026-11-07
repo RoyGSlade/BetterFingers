@@ -3,7 +3,7 @@ import os
 import tempfile
 import unittest
 
-import voice_presets
+from backend.stores import voice_presets
 
 
 class VoicePresetsTests(unittest.TestCase):

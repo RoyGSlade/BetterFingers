@@ -27,8 +27,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-import data_categories as dc
-import data_lifecycle as dl
+from backend.privacy import data_categories as dc
+from backend.privacy import data_lifecycle as dl
 
 
 class _TempRootMixin(unittest.TestCase):
@@ -45,10 +45,10 @@ class _TempRootMixin(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.root = pathlib.Path(self._tmp.name)
         patchers = [
-            patch("app_paths.resolve_base", return_value=self.root),
-            patch("utils.get_user_data_path", return_value=str(self.root)),
-            patch("history_store.get_user_data_path", return_value=str(self.root)),
-            patch("recordings.get_user_data_path", return_value=str(self.root)),
+            patch("backend.config.app_paths.resolve_base", return_value=self.root),
+            patch("backend.config.utils.get_user_data_path", return_value=str(self.root)),
+            patch("backend.stores.history_store.get_user_data_path", return_value=str(self.root)),
+            patch("backend.stores.recordings.get_user_data_path", return_value=str(self.root)),
             patch("server.get_user_data_path", return_value=str(self.root)),
         ]
         for p in patchers:
@@ -94,7 +94,7 @@ class UnmappedFileTests(_TempRootMixin):
         # Create the file the category's own module names, by asking for the
         # declared path list after touching each candidate the module exposes.
         # For single-file JSON stores this is exactly one path.
-        import data_paths
+        from backend.privacy import data_paths
         fn = getattr(data_paths, category.id, None)
         if fn is None:
             return []
@@ -166,13 +166,13 @@ class DeclaredPathMatchesStoreTests(_TempRootMixin):
                          [p for p in dc.data_paths.persona_learning()])
 
     def test_history_db(self):
-        import history_store
+        from backend.stores import history_store
         history_store.init()
         declared = {str(p) for p in dc.data_paths.history_db()}
         self.assertIn(history_store.get_db_path(), declared)
 
     def test_raw_recordings(self):
-        import recordings
+        from backend.stores import recordings
         directory = recordings.get_recordings_dir()
         self.assertEqual([pathlib.Path(directory)], dc.data_paths.raw_recordings())
 

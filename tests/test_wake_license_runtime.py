@@ -13,8 +13,8 @@ from unittest import mock
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-import wake_models  # noqa: E402
-import wake_word  # noqa: E402
+from backend.wake import wake_models  # noqa: E402
+from backend.wake import wake_word  # noqa: E402
 
 
 class LicenseGateTests(unittest.TestCase):
@@ -80,13 +80,13 @@ class DownloadPathTests(unittest.TestCase):
             "license": "CC-BY-NC-SA-4.0", "source": "test",
         }
         with mock.patch.object(wake_models, "AVAILABLE_WAKE_MODELS", poisoned), \
-                mock.patch("model_manager.download_file") as download:
+                mock.patch("backend.models.model_manager.download_file") as download:
             with self.assertRaises(wake_models.WakeModelLicenseRefused):
                 wake_models.download_wake_model("bad_phrase")
         download.assert_not_called()
 
     def test_an_allowed_entry_still_downloads(self):
-        with mock.patch("model_manager.download_file") as download, \
+        with mock.patch("backend.models.model_manager.download_file") as download, \
                 mock.patch.object(wake_models, "get_wake_model_path", return_value="/tmp/x.onnx"):
             wake_models.download_wake_model("melspectrogram")
         download.assert_called_once()

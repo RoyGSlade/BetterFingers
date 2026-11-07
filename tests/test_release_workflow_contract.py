@@ -7,6 +7,8 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/build-installer.yml"
 CI_WORKFLOW = ROOT / ".github/workflows/ci.yml"
 INSTALLER_SMOKE = ROOT / "tools/smoke_installer.ps1"
+SIGNING_WRAPPER = ROOT / "tools/build_and_sign_windows.ps1"
+SIGNING_HELPER = ROOT / "tools/sign_windows_artifacts.ps1"
 
 
 def _workflow_text():
@@ -90,6 +92,48 @@ def test_linux_appimage_smoke_does_not_disable_electron_sandbox():
     assert "--no-sandbox" not in _workflow_text()
 
 
+def test_both_installer_builds_provide_a_pinned_bundled_model_source():
+    # app/scripts/build-backend.js refuses to build without a model source (the
+    # installer ships Systran base.en so first dictation needs no download). CI
+    # supplies the pinned, hash-verified fetch for both packaged builds, and must
+    # never use the dev-only skip flag or a release would ship without the model.
+    import yaml
+
+    jobs = yaml.safe_load(_workflow_text())["jobs"]
+    expected = {
+        "windows-installer": "npm run dist:win",
+        "linux-appimage": "npm run dist:linux",
+    }
+    for job, command in expected.items():
+        steps = [step for step in jobs[job]["steps"] if step.get("run") == command]
+        assert len(steps) == 1, f"{job} must run {command} exactly once"
+        env = steps[0].get("env") or {}
+        assert env.get("BETTERFINGERS_ALLOW_MODEL_DOWNLOAD") == "1"
+        assert "BETTERFINGERS_SKIP_MODEL_BUNDLE" not in env
+        assert "BETTERFINGERS_BUNDLED_MODEL_SOURCE" not in env
+    assert "BETTERFINGERS_SKIP_MODEL_BUNDLE" not in _workflow_text()
+
+    # The signed Windows path never runs `npm run dist:win`: the pre-login
+    # "Prepare" step compiles the backend and the signing wrapper runs with
+    # -UsePreparedPayload (so it does not call build:backend again). That
+    # prepare step is therefore the one that needs the pinned model source, and
+    # it must exist exactly once, run only on the signed path, and precede login.
+    steps = jobs["windows-installer"]["steps"]
+    prepare = [s for s in steps if "npm run build:backend" in (s.get("run") or "")]
+    assert len(prepare) == 1, "signed path must compile the backend in exactly one step"
+    prepare_env = prepare[0].get("env") or {}
+    assert prepare_env.get("BETTERFINGERS_ALLOW_MODEL_DOWNLOAD") == "1"
+    assert "BETTERFINGERS_SKIP_MODEL_BUNDLE" not in prepare_env
+    assert "BETTERFINGERS_BUNDLED_MODEL_SOURCE" not in prepare_env
+    assert prepare[0].get("if") == "steps.signing.outputs.configured == 'true'"
+    names = [s.get("name", "") for s in steps]
+    login = next(i for i, name in enumerate(names) if name.startswith("Azure login"))
+    assert names.index(prepare[0]["name"]) < login
+    wrapper = [s for s in steps if "build_and_sign_windows.ps1" in (s.get("run") or "")]
+    assert len(wrapper) == 1
+    assert "-UsePreparedPayload" in wrapper[0]["run"]
+
+
 def test_linux_release_repairs_a_missing_locked_electron_binary_before_tests():
     workflow = _workflow_text()
     block = workflow.split("\n  linux-appimage:\n", 1)[1].split(
@@ -138,33 +182,34 @@ def test_release_identity_and_unsigned_policy_fail_closed():
     assert "Unsigned builds are allowed only for manual qualification runs." in workflow
 
 
-def test_azure_signing_account_is_wired_conditionally_and_partial_config_fails():
+def test_oidc_signing_uses_protected_environment_and_local_wrapper():
     workflow = _workflow_text()
+    block = workflow.split("\n  windows-installer:\n", 1)[1].split("\n  linux-appimage:\n", 1)[0]
     for required in (
-        'AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE',
-        'AZURE_TRUSTED_SIGNING_PUBLISHER_NAME',
-        'AZURE_TENANT_ID',
-        'AZURE_CLIENT_ID',
-        'AZURE_CLIENT_SECRET',
-        'BETTERFINGERS_SIGNING_MODE: ${{ steps.signing.outputs.mode }}',
-        'Azure signing is partially configured.',
-        'Azure and PFX signing are both configured',
-        'PFX signing is partially configured.',
-        'mode=azure',
-        'mode=pfx',
-        'mode=unsigned',
+        "environment: release-signing",
+        "id-token: write",
+        "azure/login@0949e32778441b2c442592b7a0e6313466dc8f29",
+        "subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}",
+        "Install-Module -Name TrustedSigning -RequiredVersion 0.5.8",
+        "Get-EveryDependency",
+        "build_and_sign_windows.ps1 -PythonPath (Get-Command python).Source -UsePreparedPayload",
+        "Azure signing is partially configured.",
+        "mode=azure-cli",
+        "mode=unsigned",
+        "az logout --only-show-errors",
+        "app/release/BetterFingers-Windows-signing-report.json",
+        ".installed-native-verification.json",
     ):
-        assert required in workflow
-
-    configure = workflow.split("      - name: Configure Windows code signing\n", 1)[1].split(
-        "\n      # Runs electron-vite build", 1
-    )[0]
-    build = workflow.split("      - name: Build installer (electron-builder)\n", 1)[1].split(
-        "\n      - name: Clean up code-signing certificate", 1
-    )[0]
-    assert "GITHUB_ENV" not in configure
-    assert "AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}" in build
-    assert "CSC_LINK: ${{ steps.signing.outputs.cert_path }}" in build
+        assert required in block
+    for forbidden in ("AZURE_CLIENT_SECRET", "WIN_CERTIFICATE_BASE64", "CSC_KEY_PASSWORD", "mode=pfx", "MinimumVersion 0.5.0"):
+        assert forbidden not in workflow
+    assert block.index("run: npm ci") < block.index("name: Azure login")
+    assert block.index("run: npm run test:unit") < block.index("name: Azure login")
+    assert block.index("npm run build:backend") < block.index("name: Azure login")
+    assert block.index("Install-Module -Name TrustedSigning") < block.index("name: Azure login")
+    assert block.index("name: Azure login") < block.index("name: Build signed installer") < block.index("name: Clear Azure signing session")
+    assert "-UsePreparedPayload" in block
+    assert "mode=azure-cli" in block
 
 
 def test_installer_artifact_name_and_installed_smoke_contract_are_exact():
@@ -232,9 +277,11 @@ def test_installed_app_smoke_proves_no_llm_and_a_real_verified_download():
         'wake/models/melspectrogram/download-state',
         '1087958',
         'ba2b0e0f8b7b875369a2c89cb13360ff53bac436f2895cced9f479fa65eb176f',
-        'Assert-AuthenticodeStatus -Path $exePath',
-        'Assert-AuthenticodeStatus -Path $backendExePath',
-        'Assert-AuthenticodeStatus -Path $uninstallerPath',
+        '-Path $exePath',
+        '-ProductExecutablePath $backendExePath',
+        'Get-ChildItem -LiteralPath $RootPath -File -Recurse',
+        '-Path $uninstallerPath',
+        'installed-native-verification.json',
         'ExpectedSignerSubject',
         'SignerCertificate.Subject',
         'DisplayVersion',
@@ -271,8 +318,26 @@ def test_installer_smoke_proves_upgrade_preservation_and_selective_cleanup():
         '/BF_DELETE_LOGS',
         'removed an unselected category path',
         '$canonicalDataRootExistedBefore',
+        '$electronDataRootExistedBefore',
+        'Join-Path $env:APPDATA "betterfingers-electron"',
+        'removed an unselected Electron path',
+        r'Local Storage\leveldb\smoke.ldb',
+        'persona_drafts.json',
+        r'tts\kokoro_onnx\smoke.bin',
     ):
         assert required in smoke
+
+
+def test_signing_toolchain_binaries_must_be_microsoft_signed_before_use():
+    # TrustedSigning and its NuGet bootstrap are pinned by version only; the
+    # signtool/Dlib binaries that hold the Azure session are trusted only after
+    # an Authenticode check, inside the step that resolves them.
+    workflow = _workflow_text()
+    step = workflow.split("- name: Install pinned signing toolchain", 1)[1].split("- name:", 1)[0]
+    assert "Get-AuthenticodeSignature -LiteralPath $path" in step
+    assert '$toolSignature.Status -ne "Valid"' in step
+    assert 'O=Microsoft Corporation' in step
+    assert step.index("Get-AuthenticodeSignature") < step.index('"signtool=$signTool"')
 
 
 def test_azure_signer_subject_is_enforced_on_artifact_and_installed_payloads():
@@ -282,7 +347,37 @@ def test_azure_signer_subject_is_enforced_on_artifact_and_installed_payloads():
     assert "$signerSubject -cne $env:AZURE_EXPECTED_PUBLISHER" in workflow
     assert '$args += @("-ExpectedSignerSubject", $env:AZURE_EXPECTED_PUBLISHER)' in workflow
     assert '$actualSubject -cne $ExpectedSubject' in smoke
-    assert smoke.count('-ExpectedSubject $ExpectedSignerSubject') == 4
+    assert smoke.count('-ExpectedSubject $ExpectedSignerSubject') == 3
+    assert smoke.count('-ExpectedPublisherSubject $ExpectedSignerSubject') == 1
+    assert '-ExpectedSubject $ExpectedPublisherSubject' in smoke
+
+
+def test_windows_payload_contract_covers_nested_backend_and_mixed_signers():
+    wrapper = SIGNING_WRAPPER.read_text(encoding="utf-8")
+    signer = SIGNING_HELPER.read_text(encoding="utf-8")
+    smoke = INSTALLER_SMOKE.read_text(encoding="utf-8")
+    for required in (
+        '$packagedBackendBundlePath = Join-Path $unpackedPath "resources\\backend\\betterfingers-backend"',
+        '$backendPath = Join-Path $packagedBackendBundlePath "betterfingers-backend.exe"',
+        '$packagedNativePayloadPaths = @(Get-NativePayloadPaths',
+        'Assert-IdenticalArtifactMaps',
+        'packagedNativePayloadVerifications = $packagedNativePayloadArtifacts',
+    ):
+        assert required in wrapper
+    for required in (
+        'function Test-IsBackendBundlePayload',
+        '$backendBundleMarker = "\\resources\\backend\\betterfingers-backend\\"',
+        'automaticBackendPreservation',
+        'classificationComplete = $classificationComplete',
+    ):
+        assert required in signer
+    for required in (
+        '-RootPath $installDir',
+        '-ProductExecutablePath $backendExePath',
+        'Get-ChildItem -LiteralPath $RootPath -File -Recurse',
+        'Installed native-payload verification report',
+    ):
+        assert required in smoke
 
 
 def test_windows_python_suites_isolate_chunks_and_files_to_release_memory():
@@ -310,3 +405,45 @@ def test_ci_preserves_required_windows_check_as_chunk_aggregator():
     assert "if: always()" in block
     assert "needs: python-tests-windows-chunk" in block
     assert 'run: test "$CHUNK_RESULT" = "success"' in block
+
+
+def test_windows_build_enforces_a_tight_app_asar_budget():
+    # Alpha 4 QA found app.asar at 684 MB (all of app/, including a second copy
+    # of the frozen backend) because a Windows-only `files` list held only a
+    # negation. The 2500 MB total budget could not see it; the intended asar is a
+    # few MB. This guard must run on both the signed and unsigned build paths.
+    import re
+
+    import yaml
+
+    steps = yaml.safe_load(_workflow_text())["jobs"]["windows-installer"]["steps"]
+    names = [step.get("name", "") for step in steps]
+
+    assert names.count("Enforce app.asar size budget") == 1
+    index = names.index("Enforce app.asar size budget")
+    guard = steps[index]
+    script = guard["run"]
+
+    assert "if" not in guard, "the asar budget must apply to signed and unsigned builds"
+    assert guard.get("shell") == "powershell"
+    assert r"app\release\win-unpacked\resources\app.asar" in script
+    # A missing asar fails the build instead of silently passing.
+    assert "Test-Path -LiteralPath $asarPath -PathType Leaf" in script
+    assert 'throw "app.asar not found' in script
+    assert "(Get-Item -LiteralPath $asarPath).Length" in script
+    limit = int(re.search(r"\$asarLimitMb = (\d+)", script).group(1))
+    assert 0 < limit <= 50, "keep the asar budget tight; the real asar is about 4 MB"
+    assert "if ($asarMb -gt $asarLimitMb)" in script
+    assert 'throw "app.asar is $asarMb MB' in script
+
+    # Both build paths precede it: the unsigned `npm run dist:win` step and the
+    # signed wrapper that consumes the prepared payload.
+    unsigned = names.index("Build unsigned installer for manual qualification")
+    wrapper = next(
+        i for i, step in enumerate(steps) if "build_and_sign_windows.ps1" in (step.get("run") or "")
+    )
+    assert unsigned < index
+    assert wrapper < index
+    # It sits beside the total budget and ahead of anything that uses the installer.
+    assert names.index("Enforce payload size budget") < index
+    assert index < names.index("Locate installer artifact")

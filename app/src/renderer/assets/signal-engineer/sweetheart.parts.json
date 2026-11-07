@@ -1,0 +1,53 @@
+{
+ "_doc": "Signal Engineer, Sweetheart shell. Same contract as standard.parts.json; pixel coordinates in the Cute atlas. 'colors' are this shell's default light colours. 'meter' on an LED makes it a live gauge: loudness = arc/bar length, energy = glow strength. Lashes are vector LEDs (layout.eyes.lashes), not atlas raster, so they glow and blink.",
+ "atlas": "Cute Signal Engineer Face Parts Atlas.png",
+ "atlasSize": [1536, 1024],
+ "partsDir": "sweetheart",
+ "viewBox": [-36, -6, 572, 356],
+ "colors": {"accent": "#ff8fc2", "amber": "#ffb27a"},
+ "parts": {
+  "chassis": {"box": [34, 6, 466, 342], "mask": {"refine": 5,
+    "polys": [[[127,12],[371,12],[385,18],[455,105],[459,118],[459,228],[452,240],[392,322],[382,330],[330,330],[322,338],[178,338],[170,330],[118,330],[108,322],[47,240],[40,228],[40,118],[44,105],[115,18]]],
+    "holes": [[[122,98],[376,98],[392,104],[418,140],[421,150],[421,175],[418,185],[392,222],[376,228],[122,228],[106,222],[80,185],[77,175],[77,150],[80,140],[106,104]],
+              [[152,235],[345,235],[357,247],[357,266],[345,278],[152,278],[140,266],[140,247]]]},
+   "leds": [
+    {"id": "chassisTop", "scrub": "bright", "role": "accent", "kind": "line", "w": 2.6, "pts": [[60,115],[127,55],[170,55],[200,75],[303,75],[330,55],[377,55],[443,118]]},
+    {"id": "chassisBarL", "scrub": "bright", "role": "amber", "kind": "line", "w": 4, "meter": "loudness", "pts": [[50,185],[50,145]]},
+    {"id": "chassisBarR", "scrub": "bright", "role": "amber", "kind": "line", "w": 4, "meter": "loudness", "pts": [[448,185],[448,145]]},
+    {"id": "chassisLowL", "scrub": "bright", "role": "accent", "kind": "line", "w": 2.6, "pts": [[63,268],[112,315]]},
+    {"id": "chassisLowR", "scrub": "bright", "role": "accent", "kind": "line", "w": 2.6, "pts": [[435,268],[386,315]]}]},
+  "earLeft": {"box": [447, 357, 623, 533], "mask": {"refine": 5, "circle": [535, 445, 86]},
+   "leds": [{"id": "earLeftRing", "scrub": "bright", "role": "accent", "kind": "arc", "c": [535, 445], "r": 71, "a0": 0, "a1": 360, "w": 4, "meter": "energy"},
+            {"id": "earLeftBar", "role": "amber", "kind": "arc", "c": [535, 445], "r": 80, "a0": 170, "a1": 190, "w": 4},
+            {"id": "earLeftArc", "role": "amber", "kind": "arc", "scrub": "bright", "meter": "loudness", "c": [535, 445], "r": 56, "a0": 50, "a1": 130, "w": 3.6}]},
+  "earRight": {"box": [642, 357, 818, 533], "mask": {"refine": 5, "circle": [730, 445, 86]},
+   "leds": [{"id": "earRightRing", "scrub": "bright", "role": "accent", "kind": "arc", "c": [730, 445], "r": 71, "a0": 0, "a1": 360, "w": 4, "meter": "energy"},
+            {"id": "earRightBar", "role": "amber", "kind": "arc", "c": [730, 445], "r": 80, "a0": -10, "a1": 10, "w": 4},
+            {"id": "earRightArc", "role": "amber", "kind": "arc", "scrub": "bright", "meter": "loudness", "c": [730, 445], "r": 56, "a0": 50, "a1": 130, "w": 3.6}]},
+  "browLeft": {"box": [22, 558, 190, 616], "mask": {"refine": 4, "smooth": 2,
+    "polys": [[[27,595],[50,573],[87,563],[137,563],[163,572],[183,598],[185,607],[177,608],[153,595],[103,597],[63,602],[40,612],[28,605]]]},
+   "leds": [{"id": "browLeftBar", "scrub": "bright", "role": "accent", "kind": "line", "w": 4.5, "pts": [[88,580],[120,580],[152,584]]}]},
+  "browRight": {"box": [198, 560, 348, 622], "mask": {"refine": 4, "smooth": 2,
+    "polys": [[[203,612],[207,592],[220,578],[320,565],[337,567],[343,578],[337,592],[220,617],[208,617]]]},
+   "leds": [{"id": "browRightSlash1", "role": "amber", "kind": "line", "w": 3.6, "pad": 3, "pts": [[303,576],[295,589]]},
+            {"id": "browRightSlash2", "role": "amber", "kind": "line", "w": 3.6, "pad": 3, "pts": [[317,576],[307,589]]},
+            {"id": "browRightSlash3", "role": "amber", "kind": "line", "w": 3.6, "pad": 3, "pts": [[328,576],[319,589]]}]},
+  "bow": {"box": [1194, 398, 1350, 492], "mask": {"refine": 5,
+    "polys": [[[1198,415],[1210,403],[1235,406],[1262,423],[1282,423],[1308,406],[1333,403],[1345,415],[1346,455],[1338,480],[1320,487],[1295,478],[1278,463],[1266,463],[1250,478],[1225,487],[1206,480],[1198,455]]]}}
+ },
+ "screens": {
+  "visor": [[122,98],[376,98],[392,104],[418,140],[421,150],[421,175],[418,185],[392,222],[376,228],[122,228],[106,222],[80,185],[77,175],[77,150],[80,140],[106,104]],
+  "mouth": [[152,235],[345,235],[357,247],[357,266],[345,278],[152,278],[140,266],[140,247]]
+ },
+ "layout": {
+  "vent": [249, 30],
+  "order": ["earLeft", "earRight", "screens", "chassis", "eyes", "mouth", "browLeft", "browRight", "bow"],
+  "earLeft": {"at": [30, 165], "scale": 0.66},
+  "earRight": {"at": [468, 165], "scale": 0.66},
+  "browLeft": {"at": [174, 117], "scale": 0.6},
+  "browRight": {"at": [322, 117], "scale": 0.6},
+  "bow": {"at": [400, 30], "scale": 0.62, "rotate": 14},
+  "eyes": {"left": [178, 166], "right": [320, 166], "size": [74, 52], "lashes": true},
+  "mouth": {"at": [248, 256], "size": [170, 34]}
+ }
+}

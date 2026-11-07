@@ -5,6 +5,15 @@ import os
 import queue
 import re
 import sys
+
+# Script mode (`python server.py`, and the PyInstaller entry script) runs this
+# file as __main__, and uvicorn serves THIS module's app. Register it under its
+# import name too, so the routers' lazy `import server` reach the live module
+# instead of importing a second copy with its own drafts, engines and runtime
+# state (tests/test_server_main_alias.py).
+if __name__ == "__main__":
+    sys.modules.setdefault("server", sys.modules[__name__])
+
 import shutil
 import tempfile
 import logging
@@ -21,46 +30,47 @@ from fastapi import Depends, FastAPI, UploadFile, File, Form, HTTPException, Web
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
-from llm_engine import LLMEngine, get_engine, get_engine_if_initialized, resolve_dictation_preset
-from log_redaction import redact_exc, redact_user_text
-from store_migration import get_degraded_events
+from backend.llm.llm_engine import LLMEngine, get_engine, get_engine_if_initialized, resolve_dictation_preset
+from backend.privacy.log_redaction import redact_exc, redact_user_text
+from backend.config.store_migration import get_degraded_events
 import version
-from transcriber import Transcriber
-from streaming_transcriber import BatchCutter, StreamingTranscriptionSession
-from hotkey_manager import HotkeyManager
-from audio_gate import should_block_for_no_audio
-from user_profile_manager import profile_manager
-from intent_engine import intent_engine, IntentState
-from project_generator import project_generator
-from platform_capabilities import get_capabilities, get_injection_status
-from hardware_report import get_hardware_report, assess_model_fit, get_hardware_tier
-from platform_paths import ensure_app_dirs, get_app_data_dir, get_config_dir
-import recordings
-import upload_safety
-import dictionary
-import dictation_commands
-import macros
-import voice_presets
-import voice_clone_qa
-import history_store
+from backend.stt.transcriber import Transcriber
+from backend.stt.streaming_transcriber import BatchCutter, StreamingTranscriptionSession
+from backend.input.hotkey_manager import HotkeyManager
+from backend.audio.audio_gate import should_block_for_no_audio
+from backend.stores.user_profile_manager import profile_manager  # noqa: F401  (read as s.profile_manager by backend/api/routes/settings.py)
+from backend.dev.intent_engine import intent_engine, IntentState
+from backend.dev.project_generator import project_generator
+from backend.platform.platform_capabilities import get_capabilities, get_injection_status
+from backend.models.hardware_report import get_hardware_report, assess_model_fit, get_hardware_tier
+from backend.config.platform_paths import ensure_app_dirs, get_app_data_dir, get_config_dir
+from backend.stores import recordings
+from backend.privacy import upload_safety
+from backend.stores import dictionary
+from backend.commands import dictation_commands
+from backend.stores import macros
+from backend.stores import voice_presets
+from backend.tts import voice_clone_qa
+from backend.stores import history_store
+from backend.wake import wake_setup_registry
 # Wave 6: the privacy report, every wipe mode, and the factory reset are all
 # generated from one declared inventory, so the screen cannot describe a store
 # the wipe misses (or miss one the screen describes).
-import data_registry
-import data_categories
-import data_lifecycle
-import mcp_client
-from job_manager import JOBS, JobState
+from backend.privacy import data_registry
+from backend.privacy import data_categories
+from backend.privacy import data_lifecycle
+from backend.dev import mcp_client
+from backend.runtime.job_manager import JOBS, JobState
 from backend.runtime.dependencies import JobManagerCancellationBridge, PipelineDependencies
 from backend.services.dictation_pipeline import DictationPipeline, FunctionStage
 from backend.services.speech_signals import compute_speech_signals, summarize_signals
 from backend.services.audio_energy import rms_windows
 from backend.domain.contracts import to_dict as _contract_to_dict
-from output_coordinator import OutputCoordinator
-import voice_commands
-import voice_edit_commands
-from utterance_history import Utterance, utterance_history
-from model_manager import (
+from backend.runtime.output_coordinator import OutputCoordinator
+from backend.commands import voice_commands
+from backend.commands import voice_edit_commands
+from backend.runtime.utterance_history import Utterance, utterance_history
+from backend.models.model_manager import (
     DEFAULT_MODEL,
     AVAILABLE_MODELS,
     check_and_download_resources,
@@ -77,14 +87,14 @@ from model_manager import (
     validate_llama_server_runtime,
 )
 # Configure Logging
-from transcriber import (
+from backend.stt.transcriber import (
     SUPPORTED_MODEL_SIZES,
     download_whisper_model,
     get_whisper_download_state,
     list_cached_models,
     remove_cached_model,
 )
-from utils import (
+from backend.config.utils import (
     get_app_path,
     get_last_active_profile,
     get_profiles_dir,
@@ -128,11 +138,35 @@ def _require_dev_routes():
 # development. Additional origins can be granted explicitly via env.
 # Pure startup-security policy lives in server_security.py (M6); re-imported here
 # so server.validate_startup_security / server._allowed_cors_origins still exist.
-from server_security import (  # noqa: E402
+from backend.api.security import (  # noqa: E402
     _LOOPBACK_HOSTS,
     _allowed_cors_origins,
+    announce_generated_token,
+    check_request_origin,
+    get_auth_token,
+    set_runtime_token,
     validate_startup_security,
 )
+
+# Signed approvals (Phase 0 item 1). The Electron main process hands this backend
+# the approval-verification key through the environment; reading it REMOVES it from
+# os.environ so it can never be inherited by a process this backend spawns (MCP
+# servers, llama-server). No key => no approvals can be granted (fail closed).
+from backend.privacy import boot_secrets  # noqa: E402
+from backend.services import approvals  # noqa: E402
+
+# Round 2, item 3: the shell hands over the bearer token and the signing key on stdin, not
+# in the environment (where /proc/<pid>/environ would keep them readable to any same-user
+# process). Round 3, item 4: on Linux the process is made non-dumpable FIRST, and if that
+# fails it exits rather than hold the secrets (boot_secrets.HARDENING_FAILED_MESSAGE).
+boot_secrets.load_from_stdin()
+# DEV-ONLY: a standalone `python server.py` (and the tests) may still pass the approval key in
+# the environment. That path is not hardened, so a packaged (frozen) backend ignores it and
+# can approve nothing unless the shell handed the key over on stdin.
+if getattr(sys, "frozen", False):
+    os.environ.pop("BETTERFINGERS_APPROVAL_KEY", None)
+else:
+    approvals.configure_from_env()
 
 app.add_middleware(
     CORSMiddleware,
@@ -162,7 +196,7 @@ def enforce_startup_security():
     in app.state.auth_token, not only os.environ.
     """
     host = os.getenv("BETTERFINGERS_HOST", "127.0.0.1")
-    token = os.getenv("BETTERFINGERS_AUTH_TOKEN")
+    token = get_auth_token()
     result = validate_startup_security(
         host, token, allow_remote=os.getenv("BETTERFINGERS_ALLOW_REMOTE") == "1"
     )
@@ -177,11 +211,10 @@ def enforce_startup_security():
         if _is_test_env():
             app.state.auth_token = token or None
             return result
-        os.environ["BETTERFINGERS_AUTH_TOKEN"] = result["token"]
+        set_runtime_token(result["token"])  # in memory, not in the environment
         logging.warning("No auth token supplied; generated an ephemeral one for this run.")
-        print(f"[betterfingers] Generated auth token for this run:\n"
-              f"[betterfingers]   BETTERFINGERS_AUTH_TOKEN={result['token']}")
-    app.state.auth_token = os.getenv("BETTERFINGERS_AUTH_TOKEN")
+        announce_generated_token(result["token"])
+    app.state.auth_token = get_auth_token()
     return result
 
 
@@ -201,7 +234,7 @@ def _record_auth_failure():
 
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
-    expected_token = os.getenv("BETTERFINGERS_AUTH_TOKEN")
+    expected_token = get_auth_token()
     if expected_token and not request.url.path.startswith("/ws/"):
         if request.method != "OPTIONS":
             auth_header = request.headers.get("Authorization", "")
@@ -214,6 +247,23 @@ async def auth_middleware(request: Request, call_next):
                     return JSONResponse(status_code=429, content={"detail": "Too many auth failures; slow down."})
                 return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
     return await call_next(request)
+
+@app.middleware("http")
+async def host_origin_middleware(request: Request, call_next):
+    """DNS-rebinding / cross-site guard (Phase 0 item 5). Registered AFTER the auth
+    middleware so it is the OUTERMOST layer: a rebinding page's request, and its
+    CORS preflight, are refused before the bearer check or any route sees them."""
+    server_info = request.scope.get("server") or (None, None)
+    reason = check_request_origin(
+        request.headers.get("host"),
+        request.headers.get("origin"),
+        server_port=server_info[1],
+        allow_testserver=_is_test_env(),
+    )
+    if reason:
+        return JSONResponse(status_code=403, content={"detail": "Forbidden"})
+    return await call_next(request)
+
 
 # Global Instances
 transcriber = None
@@ -279,13 +329,13 @@ cancellation_event = threading.Event()
 # a read-only mirror for status displays/hotkey guards; the coordinator owns
 # admission (atomic try_begin) so competing invocations are rejected instead of
 # interleaving (a boolean is not a mutex).
-from dictation_coordinator import DictationCoordinator
+from backend.runtime.dictation_coordinator import DictationCoordinator
 
 dictation_coordinator = DictationCoordinator(cancellation_event=cancellation_event)
 # Read/write leases guarding the model runtimes (STT/LLM/TTS): inference takes
 # a read lease, destructive ops (unload/reload/select/delete) take an exclusive
 # write lease that fails fast (→ 409) while inference is active.
-from model_runtime_coordinator import ModelRuntimeCoordinator, RuntimeBusyError
+from backend.runtime.model_runtime_coordinator import ModelRuntimeCoordinator, RuntimeBusyError
 
 model_runtime = ModelRuntimeCoordinator()
 # Resource ledger + admission control (DESIGN.md M6): each evictor is the
@@ -409,6 +459,44 @@ def record_runtime_error(component, message, severity="recoverable", details=Non
         return dict(row)
 
 
+# Fixed vocabulary for "the speech model is on CPU although a GPU was preferred":
+# the loader's own phrases (transcriber._load_model / _load_cpu_fallback_model) and
+# the two stable codes it publishes. Nothing outside this set reaches a status
+# surface, /doctor or /runtime/errors.
+_STT_FALLBACK_REASONS = frozenset({
+    "CUDA initialization failed",
+    "CUDA inference initialization failed",
+    "CUDA inference probe failed",
+})
+_STT_FALLBACK_CODES = frozenset({"cuda_runtime_missing", "cuda_init_failed"})
+
+
+def _sanitize_stt_fallback_reason(reason):
+    """Map a loader fallback reason onto the fixed vocabulary, else None.
+
+    For an unclassified probe failure the loader appends the exception CLASS name
+    ("CUDA inference probe failed (ValueError)"); keep the phrase, drop the suffix.
+    """
+    if not isinstance(reason, str):
+        return None
+    if reason in _STT_FALLBACK_REASONS:
+        return reason
+    if reason.startswith("CUDA inference probe failed ("):
+        return "CUDA inference probe failed"
+    return None
+
+
+def _stt_using_cpu_fallback(active_device, reason, code):
+    """True exactly when the model is running on CPU because CUDA fell back.
+
+    Derived only from already-published, sanitized status fields, so it can never
+    disagree with the ``device_fallback_*`` / ``error_state`` fields next to it and
+    never needs the model lock. CPU chosen on purpose publishes no reason or code;
+    a failed fallback attempt publishes no active device.
+    """
+    return active_device == "cpu" and (reason is not None or code is not None)
+
+
 def _record_transcriber_runtime_event(event):
     """Bridge Transcriber diagnostics without importing server from STT.
 
@@ -420,6 +508,9 @@ def _record_transcriber_runtime_event(event):
     code = str(event.get("code") or "stt_runtime_error")
     allowed_codes = {
         "cuda_runtime_missing",
+        "cuda_init_failed",
+        "model_missing",
+        "verification_failed",
         "stt_model_load_failed",
         "stt_model_not_loaded",
         "stt_inference_failed",
@@ -428,6 +519,8 @@ def _record_transcriber_runtime_event(event):
         code = "stt_runtime_error"
     state = str(event.get("state") or "unknown")
     if state not in {
+        "model_missing",
+        "verification_failed",
         "construction_failed",
         "inference_failed",
         "fallback_active",
@@ -443,11 +536,9 @@ def _record_transcriber_runtime_event(event):
     active_compute_type = event.get("active_compute_type")
     if active_compute_type not in {None, "float16", "int8"}:
         active_compute_type = None
-    fallback_reason = event.get("device_fallback_reason")
-    if fallback_reason not in {None, "CUDA initialization failed", "CUDA inference initialization failed"}:
-        fallback_reason = None
+    fallback_reason = _sanitize_stt_fallback_reason(event.get("device_fallback_reason"))
     fallback_code = event.get("device_fallback_code")
-    if fallback_code != "cuda_runtime_missing":
+    if fallback_code not in _STT_FALLBACK_CODES:
         fallback_code = None
     details = {
         "code": code,
@@ -481,10 +572,13 @@ def read_log_tail(max_lines=120):
         record_runtime_error("diagnostics", f"Failed reading debug log: {exc}")
         return {"path": str(log_path), "exists": True, "error": str(exc), "lines": []}
 
+    from backend.privacy.secret_scrub import redact_secrets
+
     return {
         "path": str(log_path),
         "exists": True,
-        "lines": [line.rstrip("\n") for line in lines[-safe_max_lines:]],
+        # An old log line may predate the redaction filter; mask on the way out.
+        "lines": [redact_secrets(line.rstrip("\n")) for line in lines[-safe_max_lines:]],
     }
 
 
@@ -821,11 +915,19 @@ def get_runtime_status_snapshot():
             bool(getattr(hotkey_manager, "is_recording", False)) if hotkey_manager else False
         ),
         "processing_active": bool(is_processing_draft),
-        "transcriber_loaded": bool(getattr(transcriber, "model", None)),
+        "transcriber_loaded": stt_status["constructed"],
         "stt": stt_status,
         "llm_ready": engine_ready,
         "llm_enabled": llm_enabled,
     }
+
+
+# Typed local-only STT load failures (BF-H2) and the one actionable sentence for
+# each. Fixed strings only: nothing from an exception ever reaches the user copy.
+_STT_UNAVAILABLE_MESSAGES = {
+    "model_missing": "The speech model is not installed. Download it in Models, then try again.",
+    "verification_failed": "The speech model could not be loaded. Re-download it in Models, then try again.",
+}
 
 
 def _transcriber_status_snapshot(stt, status_override=None):
@@ -841,6 +943,7 @@ def _transcriber_status_snapshot(stt, status_override=None):
             "active_compute_type": None,
             "device_fallback_reason": None,
             "device_fallback_code": None,
+            "using_cpu_fallback": False,
         }
     getter = getattr(stt, "get_runtime_status", None)
     if isinstance(status_override, dict) or callable(getter):
@@ -851,12 +954,17 @@ def _transcriber_status_snapshot(stt, status_override=None):
                 allowed_codes = {
                     None,
                     "cuda_runtime_missing",
+                    "cuda_init_failed",
+                    "model_missing",
+                    "verification_failed",
                     "stt_model_load_failed",
                     "stt_model_not_loaded",
                     "stt_inference_failed",
                 }
                 allowed_states = {
                     None,
+                    "model_missing",
+                    "verification_failed",
                     "construction_failed",
                     "inference_failed",
                     "fallback_active",
@@ -865,36 +973,64 @@ def _transcriber_status_snapshot(stt, status_override=None):
                     "probe_failed",
                     "unknown",
                 }
-                reason = raw.get("device_fallback_reason")
-                if reason not in {None, "CUDA initialization failed", "CUDA inference initialization failed"}:
-                    reason = None
+                reason = _sanitize_stt_fallback_reason(raw.get("device_fallback_reason"))
                 fallback_code = raw.get("device_fallback_code")
-                if fallback_code != "cuda_runtime_missing":
+                if fallback_code not in _STT_FALLBACK_CODES:
                     fallback_code = None
+                active_device = raw.get("active_device") if raw.get("active_device") in {None, "cuda", "cpu"} else None
                 return {
                     "constructed": bool(raw.get("constructed", False)),
                     "probe_passed": bool(raw.get("probe_passed", False)),
                     "inference_ready": bool(raw.get("inference_ready", False)),
                     "error_code": raw.get("error_code") if raw.get("error_code") in allowed_codes else None,
                     "error_state": raw.get("error_state") if raw.get("error_state") in allowed_states else None,
-                    "active_device": raw.get("active_device") if raw.get("active_device") in {None, "cuda", "cpu"} else None,
+                    "active_device": active_device,
                     "active_compute_type": raw.get("active_compute_type") if raw.get("active_compute_type") in {None, "float16", "int8"} else None,
                     "device_fallback_reason": reason,
                     "device_fallback_code": fallback_code,
+                    "using_cpu_fallback": _stt_using_cpu_fallback(active_device, reason, fallback_code),
+                    **({
+                        "state": raw.get("state") if raw.get("state") in {"unloaded", "unloading", "loading", "downloading", "ready", "failed"} else "unloaded",
+                        "model_size": raw.get("model_size") if raw.get("model_size") in SUPPORTED_MODEL_SIZES else None,
+                        "loading": bool(raw.get("loading", False)),
+                        "downloading": bool(raw.get("downloading", False)),
+                        "progress": None,
+                        "generation": raw.get("generation") if type(raw.get("generation")) is int else 0,
+                    } if "state" in raw else {}),
                 }
         except Exception:
             pass
+    reason = _sanitize_stt_fallback_reason(getattr(stt, "device_fallback_reason", None))
+    fallback_code = getattr(stt, "device_fallback_code", None)
+    if fallback_code not in _STT_FALLBACK_CODES:
+        fallback_code = None
+    active_device = getattr(stt, "active_device", None)
     return {
         "constructed": bool(getattr(stt, "model", None)),
         "probe_passed": False,
         "inference_ready": False,
         "error_code": None,
         "error_state": None,
-        "active_device": getattr(stt, "active_device", None),
+        "active_device": active_device,
         "active_compute_type": getattr(stt, "active_compute_type", None),
-        "device_fallback_reason": getattr(stt, "device_fallback_reason", None),
-        "device_fallback_code": getattr(stt, "device_fallback_code", None),
+        "device_fallback_reason": reason,
+        "device_fallback_code": fallback_code,
+        "using_cpu_fallback": _stt_using_cpu_fallback(active_device, reason, fallback_code),
     }
+
+
+def _stt_unavailable_code(stt):
+    """The typed local-only load failure keeping speech-to-text from running, or None.
+
+    ``model_missing`` / ``verification_failed`` from the published status snapshot
+    (lock-free). A constructed model never counts: whatever code is left over from
+    an earlier failed load, a model that is loaded was able to listen.
+    """
+    status = _transcriber_status_snapshot(stt)
+    code = status.get("error_code")
+    if code in _STT_UNAVAILABLE_MESSAGES and not status.get("constructed"):
+        return code
+    return None
 
 
 _last_amplitude_broadcast = 0.0
@@ -1010,7 +1146,7 @@ def start_hotkey_manager():
         except Exception as exc:
             logging.warning(f"Hotkey Manager stop before restart failed: {exc}")
 
-    from recorder import AudioRecorder
+    from backend.audio.recorder import AudioRecorder
 
     recorder = AudioRecorder()
     recorder.set_chunk_callback(_on_recorder_chunk)
@@ -1019,7 +1155,7 @@ def start_hotkey_manager():
         on_recording_complete_callback=on_recording_complete,
         on_recording_start_callback=on_recording_start,
         on_force_stop_callback=emergency_stop_runtime,
-        on_manual_send_callback=handle_primary_action,
+        on_manual_send_callback=handle_hotkey_primary_action,
         on_review_tts_callback=handle_review_tts_shortcut,
         on_selection_rewrite_callback=handle_selection_rewrite_shortcut,
         # Recording is never blocked by draft processing anymore — a finished
@@ -1149,7 +1285,7 @@ def get_active_long_draft_warning_words():
 # Pure send/review-gating policy lives in send_policy.py (M6); re-imported so
 # server.evaluate_confidence_send_policy / server.count_draft_tokens still exist.
 # The config readers below stay here (tests patch server.load_profile).
-from send_policy import count_draft_tokens, evaluate_confidence_send_policy  # noqa: E402
+from backend.output.send_policy import count_draft_tokens, evaluate_confidence_send_policy  # noqa: E402
 
 
 def update_draft_review_fields(draft):
@@ -1253,12 +1389,23 @@ def perform_output_action(text, action="copy_only", open_chat=False):
         from backend.domain.gaming_policy import resolve_send_action
         from backend.services.app_context import get_service
 
-        _ctx = get_service().current()
+        # Judge the window that will actually receive the text. The cached
+        # snapshot is refreshed only by the dashboard's 4 s poll (throttled when
+        # hidden), so alt-tabbing into a game and dictating used to decide
+        # against the previous window. poll() is one local foreground query;
+        # if it fails, synthetic input cannot be authorized by a stale cache.
+        _service = get_service()
+        try:
+            _ctx = _service.poll()
+        except Exception:
+            _ctx = {"gaming_policy": {"active": True}}
         requested_action = resolve_send_action(
-            requested_action, active=bool((_ctx.get("gaming_policy") or {}).get("active")),
+            requested_action, active=(_ctx.get("gaming_policy") or {}).get("active") is not False,
         )
-    except Exception:  # best-effort; a context failure must not block delivery
-        pass
+    except Exception:
+        # Unknown foreground policy cannot authorize synthetic input. Still
+        # deliver safely via clipboard when both live/cached observation fail.
+        requested_action = "copy_only"
 
     capabilities = get_capabilities()
     payload = {
@@ -1319,7 +1466,7 @@ def perform_output_action(text, action="copy_only", open_chat=False):
         # singleton's construction.
         with _output_injector_lock:
             if output_injector is None:
-                from injector import InputInjector
+                from backend.output.injector import InputInjector
 
                 output_injector = InputInjector(profile_name=get_last_active_profile())
             else:
@@ -1382,7 +1529,20 @@ def mark_draft_pending_send(draft):
         pending_manual_send_ids.append(draft["id"])
 
 
-def send_draft_by_id(draft_id, action=None, open_chat=False, allow_resend=False):
+SEND_ACTIONS = frozenset({"copy_only", "paste", "type", "open_chat_then_send"})
+
+
+def _resolve_send_action(action):
+    """The action a send will perform. ``None`` (not given) follows the profile's
+    send mode, read once; anything else is returned as given so the caller can
+    validate it. An EMPTY string is not 'not given': it is refused."""
+    if action is None:
+        mode = get_profile_output_settings()["send_mode"]
+        return "open_chat_then_send" if mode == "auto_send" else "copy_only"
+    return action
+
+
+def send_draft_by_id(draft_id, action=None, open_chat=False, allow_resend=False, reviewed_text=None, approval=None):
     # A wipe is draining/deleting user data — do not inject (which could reopen
     # or re-clipboard content the user is trying to erase).
     wiping = _reject_if_wiping("draft send")
@@ -1401,12 +1561,12 @@ def send_draft_by_id(draft_id, action=None, open_chat=False, allow_resend=False)
         }
         return {"id": draft_id, **wiping}
     try:
-        return _send_draft_by_id_locked(draft_id, action, open_chat, allow_resend)
+        return _send_draft_by_id_locked(draft_id, action, open_chat, allow_resend, reviewed_text, approval)
     finally:
         output_coordinator.end_send(send_op_id)
 
 
-def _send_draft_by_id_locked(draft_id, action, open_chat, allow_resend):
+def _send_draft_by_id_locked(draft_id, action, open_chat, allow_resend, reviewed_text=None, approval=None):
     # Atomic state transition (compare-and-set to "sending" under the lock)
     # so two simultaneous requests cannot both inject the same text. A request
     # that loses the race gets the existing outcome instead of re-injecting.
@@ -1427,6 +1587,43 @@ def _send_draft_by_id_locked(draft_id, action, open_chat, allow_resend):
             response.update({"ok": False, "error": "already_sent",
                              "message": "This draft was already sent; pass allow_resend to send again."})
             return response
+        # Phase 0 items 1 and 3: placing text into another application needs a
+        # signed approval minted by the Electron main process after the person
+        # tapped, bound to this exact draft text, action and open-chat flag. A
+        # request body can no longer stand in for the tap. Copy-to-clipboard is the
+        # only action that does not need one (it puts nothing into another app).
+        # Resolve the action EXACTLY ONCE (round 2, item 1). It used to be resolved
+        # here to decide whether a ticket is needed and again after the lock to
+        # decide what to do, so a profile change between the two reads could turn an
+        # unchecked copy into open_chat_then_send. The value decided here is the value
+        # that is executed, and it must be one of the known actions.
+        requested = _resolve_send_action(action)
+        if requested not in SEND_ACTIONS:
+            return {"ok": False, "error": "invalid_action", "draft_id": draft_id,
+                    "message": "That is not a send action BetterFingers knows."}
+        if requested != "copy_only":
+            expected_bind = approvals.draft_send_bind(requested, draft.get("final_text", ""), bool(open_chat))
+            try:
+                approvals.verify(
+                    approval,
+                    purpose=approvals.PURPOSE_DRAFT_SEND,
+                    subject=str(draft_id),
+                    bind=expected_bind,
+                )
+            except approvals.ApprovalError as exc:
+                return {"ok": False, "error": exc.code, "message": exc.message, "draft_id": draft_id}
+        if reviewed_text is not None:
+            # The renderer supplies evidence of what was visible, never new
+            # content. Compare and reserve the backend-owned text atomically.
+            if draft.get("final_text", "") != reviewed_text:
+                return {"ok": False, "error": "displayed_draft_changed",
+                        "message": "Draft changed; review the current text before placing it."}
+            if status not in {"pending", "accepted"}:
+                return {"ok": False, "error": "draft_not_reviewable",
+                        "message": "This draft is not awaiting review."}
+            draft["status"] = "accepted"
+            mark_draft_pending_send(draft)
+            status = "accepted"
         prior_status = status
         # Stamp this send with an operation id + this process's token, and record
         # that a send is in flight. Persisted below *before* injection so a crash
@@ -1446,8 +1643,7 @@ def _send_draft_by_id_locked(draft_id, action, open_chat, allow_resend):
     # (§9): disk + SQLite IO must not serialize other draft operations.
     save_draft_history(changed_draft_id=draft_id)
 
-    settings = get_profile_output_settings()
-    requested_action = action or ("open_chat_then_send" if settings["send_mode"] == "auto_send" else "copy_only")
+    requested_action = requested  # the value that was approved above; never re-resolved
     try:
         result = perform_output_action(final_text, requested_action, open_chat=open_chat)
     except BaseException:
@@ -1572,7 +1768,7 @@ def handle_review_tts_shortcut():
             return {"ok": True, "text": text, "message": "Review text read aloud."}
 
     try:
-        from clipboard_capture import capture_selection_text_with_restore
+        from backend.output.clipboard_capture import capture_selection_text_with_restore
         result = capture_selection_text_with_restore(timeout_ms=350, poll_ms=25)
     except Exception as exc:
         logging.exception("Review TTS shortcut selection capture failed")
@@ -1669,7 +1865,7 @@ def handle_selection_rewrite_shortcut():
             is_processing_draft = True
         try:
             try:
-                from clipboard_capture import capture_selection_text_with_restore
+                from backend.output.clipboard_capture import capture_selection_text_with_restore
 
                 captured = capture_selection_text_with_restore(timeout_ms=350, poll_ms=25)
             except Exception as exc:
@@ -1854,7 +2050,39 @@ def handle_selection_rewrite_shortcut():
                 is_processing_draft = False
 
 
-def handle_primary_action():
+_primary_action_lock = threading.Lock()
+_primary_action_selection_guard_until = 0.0
+_primary_action_selection_guard_draft_id = None
+
+
+def handle_primary_action(displayed_draft_id=None, displayed_final_text=None, review_visible=False, approval=None):
+    global _primary_action_selection_guard_until
+    global _primary_action_selection_guard_draft_id
+    # A repeated F9 cannot fall through to selection capture while its first
+    # placement is still running. Emergency stop never takes this lock.
+    if not _primary_action_lock.acquire(blocking=False):
+        return {"ok": False, "error": "primary_action_in_progress",
+                "message": "Primary action is already in progress."}
+    try:
+        with draft_lock:
+            just_placed = get_draft_by_id(_primary_action_selection_guard_draft_id)
+        if displayed_draft_id is None and not pending_manual_send_ids \
+                and just_placed and just_placed.get("status") == "sent" \
+                and time.monotonic() < _primary_action_selection_guard_until:
+            return {"ok": False, "error": "primary_action_repeat",
+                    "message": "Ignored repeated primary action after placement."}
+        result = _handle_primary_action(displayed_draft_id, displayed_final_text, review_visible, approval)
+        if result.get("status") == "sent":
+            # The overlay hides after placement, so a quick second press loses
+            # its display ID. Do not reinterpret that double press as read-aloud.
+            _primary_action_selection_guard_until = time.monotonic() + 0.4
+            _primary_action_selection_guard_draft_id = result.get("id")
+        return result
+    finally:
+        _primary_action_lock.release()
+
+
+def _handle_primary_action(displayed_draft_id, displayed_final_text, review_visible=False, approval=None):
     if hotkey_manager is not None and bool(getattr(hotkey_manager, "is_recording", False)):
         logging.info("Ignored primary action while recording is active.")
         return {"ok": False, "message": "Recording is active; primary action ignored."}
@@ -1862,15 +2090,52 @@ def handle_primary_action():
         logging.info("Ignored primary action while draft processing is active.")
         return {"ok": False, "message": "Draft processing is active; primary action ignored."}
 
-    while pending_manual_send_ids:
-        draft_id = pending_manual_send_ids.pop(0)
-        draft = get_draft_by_id(draft_id)
-        if not draft or not draft.get("pending_send"):
-            continue
-        return send_draft_by_id(draft_id, action="paste", open_chat=False)
+    if displayed_draft_id is not None:
+        if not isinstance(displayed_final_text, str):
+            return {"ok": False, "error": "displayed_draft_unknown"}
+        # Never substitute another draft (including an older accepted draft).
+        return send_draft_by_id(displayed_draft_id, action="paste", open_chat=False,
+                                reviewed_text=displayed_final_text, approval=approval)
+
+    with draft_lock:
+        draft_id = None
+        pending_text = ""
+        while pending_manual_send_ids:
+            # Peek, do not pop: a send that is refused for want of an approval
+            # must leave the draft queued for the press that carries one.
+            candidate = pending_manual_send_ids[0]
+            draft = get_draft_by_id(candidate)
+            if draft and draft.get("pending_send"):
+                draft_id = candidate
+                pending_text = draft.get("final_text", "")
+                break
+            pending_manual_send_ids.pop(0)  # stale entry, dropped as before
+        if draft_id is None and any(d.get("status") == "sending" for d in draft_queue):
+            # Selection capture uses the clipboard; never race an in-flight paste.
+            return {"ok": False, "error": "send_in_progress",
+                    "message": "A draft is being placed; try again in a moment."}
+        if draft_id is None and review_visible and any(d.get("status") == "pending" for d in draft_queue):
+            # The overlay is showing but has not confirmed which draft it
+            # painted: do not guess a draft, and do not read the selection.
+            # A HIDDEN overlay (Escape keeps the draft pending) falls through
+            # to read-aloud as before, so one ignored draft cannot disable F9.
+            return {"ok": False, "error": "displayed_draft_unknown",
+                    "message": "The review overlay is still showing the draft; press again."}
+    if draft_id is not None:
+        result = send_draft_by_id(draft_id, action="paste", open_chat=False, approval=approval)
+        if result.get("error") in (approvals.ERR_REQUIRED, approvals.ERR_INVALID, approvals.ERR_UNAVAILABLE):
+            # Challenge: tell the caller (Electron main, on the physical key press)
+            # exactly which draft and text this press would place, so it can sign
+            # an approval bound to them. The draft stays queued.
+            result = {**result, "draft_id": draft_id, "action": "paste", "final_text": pending_text}
+        else:
+            with draft_lock:
+                while draft_id in pending_manual_send_ids:
+                    pending_manual_send_ids.remove(draft_id)  # same bookkeeping the old pop() did
+        return result
 
     try:
-        from clipboard_capture import capture_selection_text_with_restore
+        from backend.output.clipboard_capture import capture_selection_text_with_restore
 
         result = capture_selection_text_with_restore(timeout_ms=350, poll_ms=25)
     except Exception as exc:
@@ -1883,6 +2148,21 @@ def handle_primary_action():
             speak_text_aloud(text)
 
     broadcast_status_threadsafe("selection_captured" if result.get("ok") else "selection_capture_failed", result)
+    return result
+
+
+def handle_hotkey_primary_action():
+    """The send hotkey as seen by THIS process's own keyboard hook (the standalone/dev path).
+
+    A key press is not an approval (round 2, item 2): a profile can name any key, and
+    pressing one proves nothing about what the person reviewed. So this asks for the
+    placement and, when it needs a signed approval it does not have, announces that a
+    tap is needed (``command_needs_tap``), which the Electron shell turns into its native
+    approval dialog. It never places text by itself.
+    """
+    result = handle_primary_action()
+    if isinstance(result, dict) and result.get("error") in (approvals.ERR_REQUIRED, approvals.ERR_INVALID, approvals.ERR_UNAVAILABLE):
+        broadcast_status_threadsafe("command_needs_tap", {"action": "send", "draft_id": result.get("draft_id")})
     return result
 
 
@@ -1926,7 +2206,7 @@ def emergency_stop_runtime():
     # Quiesce the shared capture stream: emergency stop must leave no live
     # audio consumer regardless of who held the broker.
     try:
-        import audio_input_broker
+        from backend.audio import audio_input_broker
         audio_input_broker.get_broker().stop_all()
     except Exception as exc:
         logging.warning(f"Emergency broker stop failed: {exc}")
@@ -2014,6 +2294,7 @@ def _percentile(values, pct):
 
 def get_pipeline_metrics_summary():
     """Summary stats over the recent latency samples for the HUD."""
+    from backend.runtime import latency
     with pipeline_metrics_lock:
         samples = list(pipeline_metrics)
 
@@ -2036,6 +2317,7 @@ def get_pipeline_metrics_summary():
         "llm": stage_stats("llm_ms"),
         "total": stage_stats("total_ms"),
         "recent": samples[-10:],
+        "latency": latency.snapshot(),
     }
 
 
@@ -2090,7 +2372,12 @@ class _RecordingsRecoverySink:
     persist-audio call exactly (same metadata shape, same swallow-and-log
     error handling so a disk failure never breaks dictation)."""
 
-    def save(self, recording_result, *, reason):
+    def save_with_latency(self, recording_result, *, reason, timing):
+        return self.save(recording_result, reason=reason, timing=timing)
+
+    def save(self, recording_result, *, reason, timing=None):
+        from backend.runtime import latency
+        latency.safe(timing, "start", "recovery_save")
         try:
             recordings.save_recording(
                 recording_result,
@@ -2098,7 +2385,10 @@ class _RecordingsRecoverySink:
                 metadata={"stop_reason": getattr(recording_result, "stop_reason", "manual")},
             )
         except Exception as exc:
+            latency.safe(timing, "end", "recovery_save", "failed")
             logging.debug(f"Could not persist recording: {exc}")
+        else:
+            latency.safe(timing, "end", "recovery_save")
         return None
 
 
@@ -2120,11 +2410,18 @@ def process_recording_result(
     block until the running pipeline finishes instead of rejecting, so
     back-to-back recordings are processed in order rather than bounced.
     """
+    from backend.runtime import latency
+    # Only a live stop-origin capture owns a latency context. Direct callers
+    # (draft retry, recording re-transcription) carry none, or an already
+    # terminal one, and record nothing instead of polluting the bounded ring.
+    timing = latency.live_context(recording_result)
+    latency.safe(timing, "start", "pipeline_wait")
     global is_processing_draft, _active_dictation_job_id
     # A privacy wipe must operate on a quiescent system: never start (or
     # recover-save) a recording while one is running, or it would regrow data
     # the wipe is trying to erase.
     if _reject_if_wiping("recording drop"):
+        latency.safe(timing, "finish", "cancelled", "privacy_wipe")
         broadcast_status_threadsafe(
             "dictation_busy",
             {"message": "A privacy wipe is in progress; this recording was discarded."},
@@ -2141,12 +2438,14 @@ def process_recording_result(
         if wait_for_gate
         else dictation_coordinator.try_begin()
     )
+    latency.safe(timing, "end", "pipeline_wait")
     if not admitted:
         logging.warning("Dictation pipeline busy; rejecting competing invocation.")
         # Re-check the wipe flag: it may have been set after the top guard.
         # A rejected recording must not seed the recovery bin during a wipe.
         if not _reject_if_wiping("rejected-recording recovery save"):
             try:
+                latency.safe(timing, "start", "recovery_save")
                 recordings.save_recording(
                     recording_result,
                     rec_id=recordings.new_rec_id(),
@@ -2156,7 +2455,11 @@ def process_recording_result(
                     },
                 )
             except Exception as exc:
+                latency.safe(timing, "end", "recovery_save", "failed")
                 logging.debug(f"Could not persist rejected recording: {exc}")
+            else:
+                latency.safe(timing, "end", "recovery_save")
+        latency.safe(timing, "finish", "incomplete", "pipeline_busy")
         broadcast_status_threadsafe(
             "dictation_busy",
             {"message": "A dictation is already processing; recording saved to recovery."},
@@ -2166,6 +2469,7 @@ def process_recording_result(
     # caller was blocked in begin() (or between try_begin and here). Running
     # the pipeline now would save/create data behind the wipe's back.
     if _reject_if_wiping("recording drop (post-admission)"):
+        latency.safe(timing, "finish", "cancelled", "privacy_wipe")
         dictation_coordinator.finish()
         logging.info("Dropping recording: a privacy wipe began while awaiting the pipeline gate.")
         broadcast_status_threadsafe(
@@ -2188,6 +2492,7 @@ def process_recording_result(
         dictation_coordinator.set_active_job(job.id)
         JOBS.transition(job.id, JobState.TRANSCRIBING)
     except Exception as exc:
+        latency.safe(timing, "finish", "failed", "stage_error")
         logging.error(f"Failed to start dictation job: {exc}")
         with draft_lock:
             is_processing_draft = False
@@ -2220,6 +2525,29 @@ def process_recording_result(
     # cancelled/failed handling below sees the same state the old inline
     # except-blocks did.
 
+    def _commit_draft(ctx, *args, **kwargs):
+        with latency.span(timing, "draft_commit"):
+            draft = create_draft(*args, **kwargs)
+            ctx.draft = draft
+        latency.safe(timing, "committed")
+        return draft
+
+    def _publish_draft(*args, **kwargs):
+        with latency.span(timing, "preview_publish"):
+            return broadcast_status_threadsafe(*args, **kwargs)
+
+    def _timed_stage(func, stage):
+        def run(ctx, deps):
+            if stage == "cleanup" and not bool(profile_config.get("llm_enabled", False)):
+                latency.safe(timing, "configure", cleanup="skipped")
+                latency.safe(timing, "skip", "cleanup")
+                return func(ctx, deps)
+            if stage == "cleanup":
+                latency.safe(timing, "configure", cleanup="enabled")
+            with latency.span(timing, stage):
+                return func(ctx, deps)
+        return run
+
     def _stage_transcribe(ctx, deps):
         nonlocal raw_text, confidence, stt_ms, dict_terms
         broadcast_status_threadsafe("transcribing")
@@ -2232,47 +2560,66 @@ def process_recording_result(
             # The transcript was already built batch-by-batch while the user
             # was still talking; the only STT cost paid here was draining the
             # tail (streamed_stt_ms, measured by the dispatcher).
+            latency.safe(timing, "skip", "stt_decode")
             raw_text = str(streamed_text)
             if isinstance(streamed_confidence, dict) and streamed_confidence:
                 confidence = streamed_confidence
             stt_ms = streamed_stt_ms
         else:
-            trans = ensure_transcriber_initialized(preload=False)
-            hotwords = dictionary.hotwords_string(dict_terms)
-            if hasattr(audio_data, "size") and audio_data.size <= 0:
-                raw_text = ""
-            elif audio_data is None:
-                raw_text = ""
-            else:
-                # STT read lease: a Whisper reload/unload cannot free the model
-                # mid-transcription (it will 409 or wait for this to finish).
-                with model_runtime.read_lease("stt"):
-                    if hasattr(trans, "transcribe_with_structured"):
-                        # Single decode covers both the legacy confidence dict and
-                        # the structured segments (I3.1) — transcribe_with_confidence
-                        # + transcribe_structured would each decode independently.
-                        raw_text, confidence, structured = trans.transcribe_with_structured(audio_data, hotwords=hotwords)
-                        ctx.extra["transcription_result"] = structured
-                        try:
-                            # Without energy_windows the energy half of `arousal`
-                            # is always 0.0, leaving it a rescaled pace metric.
-                            # audio_data is the same mono float32 buffer just
-                            # transcribed -- no extra capture, nothing leaves the
-                            # device, and the helper returns loudness numbers only.
-                            ctx.extra["speech_signals"] = compute_speech_signals(
-                                structured.segments,
-                                audio_duration_s=structured.audio_duration_s,
-                                energy_windows=rms_windows(
-                                    audio_data,
-                                    sample_rate=getattr(recording_result, "sample_rate", 16000) or 16000,
-                                ),
-                            )
-                        except Exception as exc:
-                            logging.debug(f"speech signal computation failed: {exc}")
-                    elif hasattr(trans, "transcribe_with_confidence"):
-                        raw_text, confidence = trans.transcribe_with_confidence(audio_data, hotwords=hotwords)
-                    else:
-                        raw_text = trans.transcribe(audio_data)
+            structured = None
+            has_structured = False
+            with latency.span(timing, "stt_decode"):
+                trans = ensure_transcriber_initialized(preload=False)
+                observed = {
+                    "engine": "whisper", "model": getattr(trans, "model_size", "unknown"),
+                    "temperature": "warm" if getattr(trans, "model", None) is not None else "cold",
+                }
+                for key, value in observed.items():
+                    if type(value) is str and value in latency.ENUMS[key]:
+                        latency.safe(timing, "configure", **{key: value})
+                hotwords = dictionary.hotwords_string(dict_terms)
+                if hasattr(audio_data, "size") and audio_data.size <= 0:
+                    raw_text = ""
+                elif audio_data is None:
+                    raw_text = ""
+                else:
+                    # STT read lease: a Whisper reload/unload cannot free the model
+                    # mid-transcription (it will 409 or wait for this to finish).
+                    with model_runtime.read_lease("stt"):
+                        if hasattr(trans, "transcribe_with_structured"):
+                            # Single decode covers both the legacy confidence dict and
+                            # the structured segments (I3.1) — transcribe_with_confidence
+                            # + transcribe_structured would each decode independently.
+                            raw_text, confidence, structured = trans.transcribe_with_structured(audio_data, hotwords=hotwords)
+                            has_structured = True
+                            ctx.extra["transcription_result"] = structured
+                        elif hasattr(trans, "transcribe_with_confidence"):
+                            raw_text, confidence = trans.transcribe_with_confidence(audio_data, hotwords=hotwords)
+                        else:
+                            raw_text = trans.transcribe(audio_data)
+            if has_structured:
+                # Outside the stt_decode span on purpose: this is loudness math
+                # on the finished transcript, not part of the transcriber call.
+                try:
+                    # Without energy_windows the energy half of `arousal`
+                    # is always 0.0, leaving it a rescaled pace metric.
+                    # audio_data is the same mono float32 buffer just
+                    # transcribed -- no extra capture, nothing leaves the
+                    # device, and the helper returns loudness numbers only.
+                    ctx.extra["speech_signals"] = compute_speech_signals(
+                        structured.segments,
+                        audio_duration_s=structured.audio_duration_s,
+                        energy_windows=rms_windows(
+                            audio_data,
+                            sample_rate=getattr(recording_result, "sample_rate", 16000) or 16000,
+                        ),
+                    )
+                except Exception as exc:
+                    logging.debug(f"speech signal computation failed: {exc}")
+            for key, attr in (("device", "active_device"), ("compute_type", "active_compute_type")):
+                value = getattr(trans, attr, "unknown")
+                if type(value) is str and value in latency.ENUMS[key]:
+                    latency.safe(timing, "configure", **{key: value})
             # Inside the else-branch on purpose: the streamed path already set
             # stt_ms to the dispatcher-measured tail-drain time.
             stt_ms = (time.perf_counter() - _stt_start) * 1000.0
@@ -2289,6 +2636,9 @@ def process_recording_result(
         # Each load_profile() call is disk I/O + YAML parse, so the hot path
         # loads once and shares the dict.
         profile_config = get_active_recording_config()
+        mode = profile_config.get("use_mode")  # no modes are wired yet: stays "unknown"
+        if type(mode) is str and mode in latency.ENUMS["mode"]:
+            latency.safe(timing, "configure", mode=mode)
         pipeline_flags = get_pipeline_flags(profile_config)
         # Honour the user's selected persona for cleanup. resolve_dictation_preset
         # falls back to True Janitor when the selection is empty or names a persona
@@ -2301,7 +2651,8 @@ def process_recording_result(
             edit_cmd = voice_edit_commands.parse_edit_command(raw_text)
             if edit_cmd and edit_cmd.action == "scratch_that":
                 popped = utterance_history.pop_last()
-                draft = create_draft(
+                draft = _commit_draft(
+                    ctx,
                     raw_text,
                     "",
                     preset=preset,
@@ -2309,7 +2660,7 @@ def process_recording_result(
                     metadata=metadata,
                     recording_result=recording_result,
                 )
-                broadcast_status_threadsafe(
+                _publish_draft(
                     "scratch_last",
                     {
                         "draft_id": draft["id"],
@@ -2339,19 +2690,29 @@ def process_recording_result(
             profile_config,
         )
         if blocked:
-            draft = create_draft(
+            blocked_error = "No usable audio was recorded."
+            # Local-only STT never downloads: with no usable model the transcript is
+            # empty whatever was recorded. Name the real cause and the way out
+            # (the Models page) instead of sending the user to their microphone.
+            stt_code = _transcriber_status_snapshot(transcriber).get("error_code")
+            if stt_code in _STT_UNAVAILABLE_MESSAGES and not str(raw_text or "").strip():
+                blocked_error = _STT_UNAVAILABLE_MESSAGES[stt_code]
+                reasons = [*reasons, stt_code]
+            ctx.extra["_latency_no_audio"] = True
+            draft = _commit_draft(
+                ctx,
                 raw_text,
                 "",
                 preset=preset,
                 status="blocked",
                 metadata=metadata,
-                error="No usable audio was recorded.",
+                error=blocked_error,
                 gate_reasons=reasons,
                 recording_result=recording_result,
                 transcription_result=_serialize_optional_contract(ctx.extra.get("transcription_result")),
                 speech_signals=_serialize_optional_contract(ctx.extra.get("speech_signals")),
             )
-            broadcast_status_threadsafe(
+            _publish_draft(
                 "draft_blocked",
                 {
                     "draft_id": draft["id"],
@@ -2468,7 +2829,8 @@ def process_recording_result(
         ctx.final_text = final_text
 
     def _stage_finalize(ctx, deps):
-        draft = create_draft(
+        draft = _commit_draft(
+            ctx,
             raw_text,
             final_text,
             preset=preset,
@@ -2504,7 +2866,7 @@ def process_recording_result(
             audio_seconds=float(getattr(recording_result, "duration_seconds", 0.0) or 0.0),
             chars=len(final_text or ""),
         )
-        broadcast_status_threadsafe(
+        _publish_draft(
             "preview_ready",
             {
                 "draft_id": draft["id"],
@@ -2524,9 +2886,9 @@ def process_recording_result(
 
     stages = [
         FunctionStage(name="transcribe", func=_stage_transcribe),
-        FunctionStage(name="post_process", func=_stage_post_process),
+        FunctionStage(name="post_process", func=_timed_stage(_stage_post_process, "post_process")),
         FunctionStage(name="no_audio_gate", func=_stage_no_audio_gate),
-        FunctionStage(name="rewrite", func=_stage_rewrite, job_state=JobState.REFINING),
+        FunctionStage(name="rewrite", func=_timed_stage(_stage_rewrite, "cleanup"), job_state=JobState.REFINING),
         FunctionStage(name="finalize", func=_stage_finalize, job_state=JobState.REVIEW_READY),
     ]
     deps = PipelineDependencies(
@@ -2535,9 +2897,15 @@ def process_recording_result(
     )
     pipeline = DictationPipeline(stages, deps, kind="dictation", label="Dictation")
 
+    pipeline_returned = False
     try:
-        outcome = pipeline.run(recording_result, metadata=metadata, job=job)
+        outcome = pipeline.run(recording_result, metadata=metadata, job=job, latency_context=timing)
+        pipeline_returned = True
         if outcome.completed:
+            if outcome.context.extra.get("_latency_no_audio"):
+                latency.safe(timing, "finish", "incomplete", "no_audio")
+            else:
+                latency.safe(timing, "finish")
             return outcome.context.draft
         if outcome.cancelled:
             logging.info("Recording processing was cancelled by the user.")
@@ -2594,6 +2962,14 @@ def process_recording_result(
         broadcast_status_threadsafe("error", {"message": outcome.error, "draft_id": draft["id"]})
         return draft
     finally:
+        # Every normal pipeline return already issued its own terminal finish,
+        # which is non-blocking and may have been dropped under collector lock
+        # contention. Retry it without relabelling a successful or cancelled
+        # dictation as a stage error; a no-op when the record already closed.
+        if pipeline_returned:
+            latency.safe(timing, "finish", "incomplete", "collector_failure")
+        else:
+            latency.safe(timing, "finish", "failed", "stage_error")
         with draft_lock:
             is_processing_draft = False
         # Guarantee the job reaches a terminal state even on an unexpected exit.
@@ -2644,6 +3020,12 @@ def _ensure_recording_dispatcher():
 
 def _enqueue_recording(recording_result, stream_session=None):
     """Hold a finished recording for in-order processing (never reject)."""
+    from backend.runtime import latency
+    timing = latency.context(recording_result)
+    if timing is None:
+        timing = latency.begin(boundary=False)
+        latency.attach(recording_result, timing)
+    latency.safe(timing, "configure", streaming=stream_session is not None)
     _ensure_recording_dispatcher()
     depth = _pending_recordings.qsize()
     if depth >= MAX_PENDING_RECORDINGS:
@@ -2653,6 +3035,7 @@ def _enqueue_recording(recording_result, stream_session=None):
             stream_session.abort()
         if not _reject_if_wiping("overflow recording recovery save"):
             try:
+                latency.safe(timing, "start", "recovery_save")
                 recordings.save_recording(
                     recording_result,
                     rec_id=recordings.new_rec_id(),
@@ -2662,12 +3045,17 @@ def _enqueue_recording(recording_result, stream_session=None):
                     },
                 )
             except Exception as exc:
+                latency.safe(timing, "end", "recovery_save", "failed")
                 logging.debug(f"Could not persist overflow recording: {exc}")
+            else:
+                latency.safe(timing, "end", "recovery_save")
+        latency.safe(timing, "finish", "incomplete", "queue_full")
         broadcast_status_threadsafe(
             "dictation_busy",
             {"message": "Too many recordings are waiting; this one was saved to recovery."},
         )
         return
+    latency.safe(timing, "start", "dispatch_wait")
     _pending_recordings.put((recording_result, stream_session, _pending_drop_generation))
     if depth > 0 or dictation_coordinator.is_busy():
         broadcast_status_threadsafe("dictation_queued", {"position": depth + 1})
@@ -2676,6 +3064,8 @@ def _enqueue_recording(recording_result, stream_session=None):
 def _drop_pending_recordings():
     """Privacy wipe: discard every held recording and poison items already
     dequeued but not yet processed (generation bump). Returns the drop count."""
+    from backend.runtime import latency
+    latency.reset()
     global _pending_drop_generation
     _pending_drop_generation += 1
     dropped = 0
@@ -2697,16 +3087,20 @@ def _drop_pending_recordings():
 
 
 def _recording_dispatcher_loop():
+    from backend.runtime import latency
     while True:
         item = _pending_recordings.get()
         if item is None:
             continue
         recording_result, session, generation = item
+        timing = latency.context(recording_result)
+        latency.safe(timing, "end", "dispatch_wait")
         try:
             if generation != _pending_drop_generation or _reject_if_wiping("held recording dispatch"):
                 # Invalidated by a privacy wipe after being queued/dequeued.
                 if session is not None:
                     session.abort()
+                latency.safe(timing, "finish", "cancelled", "privacy_wipe")
                 logging.info("Dropping held recording: invalidated by privacy wipe.")
                 continue
             streamed_text = None
@@ -2714,7 +3108,13 @@ def _recording_dispatcher_loop():
             streamed_stt_ms = None
             if session is not None:
                 _drain_start = time.perf_counter()
-                fin = session.finalize()
+                latency.safe(timing, "start", "stream_tail")
+                try:
+                    fin = session.finalize()
+                except Exception:
+                    latency.safe(timing, "end", "stream_tail", "failed")
+                    raise
+                latency.safe(timing, "end", "stream_tail", "completed" if fin.get("ok") else "failed")
                 if fin.get("ok") and str(fin.get("text") or "").strip():
                     streamed_text = fin["text"]
                     streamed_conf = fin.get("confidence")
@@ -2725,6 +3125,8 @@ def _recording_dispatcher_loop():
                         f"Streaming STT covered {fin.get('batches', 0)} batches; "
                         f"drain took {streamed_stt_ms:.0f}ms."
                     )
+            else:
+                latency.safe(timing, "skip", "stream_tail")
             process_recording_result(
                 recording_result,
                 streamed_text=streamed_text,
@@ -2733,18 +3135,25 @@ def _recording_dispatcher_loop():
                 wait_for_gate=True,
             )
         except Exception as exc:
+            latency.safe(timing, "finish", "failed", "dispatch_error")
             logging.error(f"Recording dispatcher failed: {redact_exc(exc)}")
 
 async def startup_event():
+    from backend.runtime import latency
+    latency.reset()
     global loop, _warmup_thread
     # Auth gate first: covers `uvicorn server:app` as well as `python
     # server.py`, and fails startup in production if no token is configured.
     enforce_startup_security()
+    # uvicorn has configured its own loggers by now: put the credential filter on
+    # them and on every handler (Phase 0 item 10).
+    from backend.privacy.secret_scrub import install_log_redaction
+    install_log_redaction()
     # Consolidate any legacy/split data root into the unified base (idempotent).
     # Guarded from the test suite so running tests never moves real user data.
     if not _is_test_env():
         try:
-            import app_paths
+            from backend.config import app_paths
             report = app_paths.migrate_legacy_data()
             if report.get("moved"):
                 logging.info("Migrated legacy data into %s: %s", report["target"], report["moved"])
@@ -2818,10 +3227,12 @@ async def startup_event():
 
 
 def shutdown_event():
+    from backend.runtime import latency
+    latency.reset(block_new=True)
     stop_hotkey_manager()
     # Safety net in case /wake/disable was never called before shutdown --
     # idempotent, safe even if wake word was never enabled this run.
-    import routes_wake
+    from backend.api.routes import wake as routes_wake
     routes_wake.stop_wake_listener()
     # Last chance to put another application's microphone back. A clean
     # shutdown that skipped this would leave a journal for the next startup to
@@ -2863,53 +3274,20 @@ async def lifespan(app: FastAPI):
 
 app.router.lifespan_context = lifespan
 
-from fastapi import Query, status
-
-@app.websocket("/ws/voice_status")
-async def websocket_endpoint(websocket: WebSocket, token: str = Query(None)):
-    # First-message auth: the bearer token must arrive as the first frame
-    # ("auth:<token>"), not in the query string — query strings leak into
-    # proxy logs, diagnostics, and crash reports. The legacy ?token= form is
-    # still accepted for one release (logged as deprecated).
-    expected_token = os.getenv("BETTERFINGERS_AUTH_TOKEN")
-    await websocket.accept()
-    if expected_token:
-        authed = False
-        if token is not None and hmac.compare_digest(str(token), expected_token):
-            logging.warning("WS auth via query string is deprecated; send an 'auth:<token>' first message.")
-            authed = True
-        else:
-            try:
-                first = await asyncio.wait_for(websocket.receive_text(), timeout=3.0)
-                presented = first[5:] if first.startswith("auth:") else ""
-                authed = hmac.compare_digest(presented, expected_token)
-            except Exception:
-                authed = False
-        if not authed:
-            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-            return
-        await websocket.send_text("auth_ok")
-    active_websockets.append(websocket)
-    try:
-        while True:
-            # Keep alive / listen for client commands (like 'cancel')
-            data = await websocket.receive_text()
-            # Handle client commands if needed
-            if data == "ping":
-                await websocket.send_text("pong")
-    except WebSocketDisconnect:
-        active_websockets.remove(websocket)
-    except Exception as e:
-        logging.error(f"WebSocket Error: {e}")
-        if websocket in active_websockets:
-            active_websockets.remove(websocket)
+# The /ws/voice_status WebSocket and the runtime-control routes (/runtime/primary-action,
+# /runtime/emergency-stop, /runtime/recording/*, /runtime/rewrite-selection,
+# /runtime/warmup, /voice-commands/execute, /transcribe) are their own slice in
+# backend/api/routes/runtime.py (R10); registered via app.include_router at the end
+# of this file. The `active_websockets` list, the `loop` capture (set in
+# startup_event), broadcast_status / broadcast_status_threadsafe and every runtime
+# helper they drive stay here and are read by the router as s.<name>.
 
 
 def ensure_tts_initialized():
     global tts_engine
     if tts_engine is None:
         try:
-            from tts_engine import ReviewTTSEngine
+            from backend.tts.tts_engine import ReviewTTSEngine
             tts_engine = ReviewTTSEngine()
             if hasattr(tts_engine, "set_admission_fn"):
                 tts_engine.set_admission_fn(lambda est, mid=None: model_runtime.request_admission("tts", est, mid))
@@ -2924,6 +3302,9 @@ def ensure_tts_initialized():
                 
             tts_engine.on_start = tts_start_callback
             tts_engine.on_stop = tts_stop_callback
+            # Read-aloud lip-sync: one loudness envelope per audio chunk, sent as it
+            # starts playing (backend/tts/loudness.py; overlay face plays it back).
+            tts_engine.on_audio_level = lambda env: broadcast_status_threadsafe("draft_tts_level", env)
         except Exception as e:
             logging.error(f"Failed to load ReviewTTSEngine: {e}")
             record_runtime_error("tts", str(e))
@@ -2933,8 +3314,8 @@ def ensure_tts_initialized():
 def _snapshot_tts_status(engine):
     """Read an existing TTS engine without creating or loading one.
 
-    ``is_loaded()`` and ``backend()`` take the engine lock, so callers on the
-    async request path must run this synchronous snapshot in a worker thread.
+    Real engines publish a separate snapshot; legacy test adapters retain
+    their methods and async callers keep offloading that compatibility path.
     """
     if engine is None:
         return {
@@ -2943,6 +3324,16 @@ def _snapshot_tts_status(engine):
             "backend": "none",
             "status_message": "TTS is not initialized.",
             "fallback": False,
+        }
+    getter = getattr(engine, "get_status_snapshot", None)
+    if callable(getter):
+        status = getter()
+        return {
+            "initialized": True,
+            "loaded": bool(status["loaded"]),
+            "backend": status["backend"],
+            "status_message": status["status_message"],
+            "fallback": bool(status["fallback"]),
         }
     return {
         "initialized": True,
@@ -3009,496 +3400,19 @@ def get_audio_devices(refresh=False):
         return dict(cached_audio_devices)
 
 
-@app.get("/runtime/version")
-async def runtime_version():
-    return {
-        "backend_version": version.BACKEND_VERSION,
-        "expected_electron_api_version": version.APP_VERSION,
-        "schema_version": 1,
-        "config_version": 1,
-    }
-
-
-@app.get("/runtime/audio-devices")
-async def list_audio_devices():
-    return get_audio_devices()
-
-
-@app.post("/runtime/audio-devices/refresh")
-async def refresh_audio_devices():
-    return get_audio_devices(refresh=True)
-
-
-@app.get("/doctor")
-async def run_doctor(refresh_audio: bool = False):
-    engine = get_engine_if_initialized()
-    engine_ready = False
-    model_id = None
-    if engine is not None:
-        try:
-            engine_ready = bool(getattr(engine, "_ready", False))
-            model_id = getattr(engine, "model_id", None)
-        except Exception:
-            pass
-
-    # STT details
-    # device/compute_type/device_fallback_reason reflect what the model ACTUALLY
-    # loaded with (set in transcriber._load_model()), not just the user's
-    # prefer_gpu setting -- e.g. on Windows without cuDNN, CUDA init fails and
-    # this honestly reports device="cpu" instead of implying GPU acceleration.
-    stt_status = _transcriber_status_snapshot(transcriber)
-    stt_fallback_reason = stt_status.get("device_fallback_reason")
-    stt_info = {
-        "initialized": transcriber is not None,
-        "loaded": bool(getattr(transcriber, "model", None)) if transcriber else False,
-        "model_size": getattr(transcriber, "model_size", None) if transcriber else None,
-        "constructed": stt_status.get("constructed", False),
-        "probe_passed": stt_status.get("probe_passed", False),
-        "inference_ready": stt_status.get("inference_ready", False),
-        "error_code": stt_status.get("error_code"),
-        "error_state": stt_status.get("error_state"),
-        "device": stt_status.get("active_device"),
-        "compute_type": stt_status.get("active_compute_type"),
-        "device_fallback_reason": stt_fallback_reason,
-        "device_fallback_code": stt_status.get("device_fallback_code"),
-        "using_cpu_fallback": bool(stt_fallback_reason),
-    }
-
-    # LLM details. Diagnostics remain observation-only when AI cleanup is off;
-    # in particular, this route never constructs the engine or downloads it.
-    try:
-        llm_enabled = bool(load_profile(get_last_active_profile()).get("llm_enabled", False))
-    except Exception:
-        llm_enabled = False
-    selected_model_id = model_id or get_selected_llm_model_id()
-    llama_server_path = str(get_server_path())
-    llama_server_exists = os.path.exists(llama_server_path)
-    model_exists = check_model_exists(selected_model_id)
-    if not llm_enabled:
-        runtime_validation = {"ok": False, "message": "AI cleanup is disabled."}
-    elif llama_server_exists:
-        runtime_validation = await run_in_threadpool(validate_llama_server_runtime, llama_server_path)
-    else:
-        runtime_validation = {"ok": False, "message": "llama-server binary is missing."}
-    required_runtime_build = required_llama_server_build(selected_model_id)
-    runtime_build = runtime_validation.get("build")
-    runtime_build_ok = (
-        not required_runtime_build
-        or (runtime_build is not None and int(runtime_build) >= required_runtime_build)
-    )
-    llm_last_error = str(getattr(engine, "_last_error", "") or "") if engine else ""
-    if not llm_enabled:
-        llm_runtime_status = "disabled"
-    elif not llama_server_exists:
-        llm_runtime_status = "missing_llama_server"
-    elif not model_exists:
-        llm_runtime_status = "missing_model"
-    elif runtime_validation.get("error_code") == "runtime_validation_timeout":
-        llm_runtime_status = "runtime_validation_timeout"
-    elif not runtime_validation.get("ok", False):
-        llm_runtime_status = "runtime_link_failure"
-    elif not runtime_build_ok:
-        llm_runtime_status = "runtime_outdated"
-    elif engine_ready:
-        llm_runtime_status = "ready"
-    elif llm_last_error:
-        llm_runtime_status = "startup_failure"
-    else:
-        llm_runtime_status = "not_loaded"
-
-    llm_info = {
-        "enabled": llm_enabled,
-        "initialized": engine is not None,
-        "ready": engine_ready,
-        "model_id": selected_model_id,
-        "llama_server_path": llama_server_path,
-        "llama_server_exists": llama_server_exists,
-        "model_exists": model_exists,
-        "runtime_status": llm_runtime_status,
-        "runtime_valid": bool(runtime_validation.get("ok", False)),
-        "runtime_compatible": bool(runtime_validation.get("ok", False) and runtime_build_ok),
-        "runtime_build": runtime_build,
-        "required_runtime_build": required_runtime_build,
-        "runtime_validation_error_code": runtime_validation.get("error_code"),
-        "runtime_validation_elapsed_sec": runtime_validation.get("elapsed_sec"),
-        "runtime_validation_timeout_sec": runtime_validation.get("timeout_sec"),
-        "runtime_message": runtime_validation.get("message", ""),
-        "last_error": llm_last_error,
-        "last_error_details": dict(getattr(engine, "_last_error_details", {}) or {}) if engine else {},
-    }
-
-    # TTS details are observation-only here. Diagnostics must never trigger a
-    # model import, download, or initialization merely because a caller opened
-    # the health panel; only report the singleton that is already present.
-    tts_info = await run_in_threadpool(_snapshot_tts_status, tts_engine)
-
-    # Hotkeys details
-    hotkeys_info = {
-        "started": hotkey_manager_started,
-        "active": hotkey_manager is not None and getattr(hotkey_manager, "_running", False),
-        "keyboard_hooks_ok": bool(hotkey_manager is not None and not getattr(hotkey_manager, "keyboard_hook_errors", [])),
-        "keyboard_hook_errors": list(getattr(hotkey_manager, "keyboard_hook_errors", [])) if hotkey_manager else [],
-    }
-
-    # Models dir
-    model_dir = Path(get_model_path(DEFAULT_MODEL)).parent
-    model_path_info = {
-        "models_dir": str(model_dir),
-        "models_dir_exists": os.path.exists(model_dir),
-        "default_model_path": str(get_model_path(DEFAULT_MODEL)),
-        "default_model_exists": os.path.exists(get_model_path(DEFAULT_MODEL)),
-    }
-
-    # Audio
-    audio_info = await run_in_threadpool(get_audio_devices, refresh=refresh_audio)
-
-    # Capabilities
-    platform_info = await run_in_threadpool(get_capabilities)
-
-    # Honest, freshly-checked (not cached-at-import) injection status: the
-    # detected method, whether the CLI tool it depends on is actually present
-    # right now, the session type, and injection_hint()'s guidance -- so e.g.
-    # a Wayland user missing wl-clipboard sees why typing/paste won't work
-    # instead of a silent no-op (DESIGN §7 injection matrix). This never
-    # performs real injection -- it only re-runs shutil.which() PATH lookups
-    # (see platform_capabilities.get_injection_status). The interactive,
-    # actually-injecting probe in tools/injection_probe.py is a standalone
-    # CLI script and is intentionally NOT wired into this route.
-    injection_info = await run_in_threadpool(get_injection_status)
-
-    # Hardware specs + model-fit assessment for the selected LLM
-    hardware_info = await run_in_threadpool(get_hardware_report)
-    model_fit_info = await run_in_threadpool(
-        assess_model_fit, selected_model_id, report=hardware_info
-    )
-    hardware_tier_info = await run_in_threadpool(
-        get_hardware_tier, report=hardware_info
-    )
-
-    # Recovery instructions
-    recovery_guidelines = {
-        "missing_model": "Go to the Models screen to download the recommended LLM or Whisper models, or verify that the GGUF/Whisper files exist in the models directory.",
-        "missing_llama_server": "llama-server binary could not be found. If you are on Linux, please compile or install llama-server and set the BETTERFINGERS_LLAMA_SERVER environment variable.",
-        "runtime_link_failure": "llama-server exists, but its shared runtime libraries are incomplete. Reinstall the runtime or repair the Linux .so symlinks in the models directory.",
-        "runtime_outdated": "The selected model requires a newer llama.cpp runtime. Download or reinstall the LLM runtime from the Models screen.",
-        "port_conflict": "Port 8000 is occupied by another process. Please close the conflicting application or configure a different port.",
-        "microphone_unavailable": "No input audio devices were detected, or microphone permission was denied. Please connect a microphone and ensure BetterFingers has permission to access it.",
-        # This fires on `is_wayland && !supports_input_injection`, and
-        # supports_input_injection is False only when injection_method ==
-        # "none" -- which platform_capabilities reaches solely when the
-        # clipboard fallback ALSO failed (no wl-clipboard/xclip/xsel). The
-        # previous text told that user "BetterFingers has safely fallen back
-        # to copying text to the clipboard", i.e. it reassured them that the
-        # one path that had also just failed was working. Nothing reaches the
-        # target application in this state, so say so and give the install
-        # that actually fixes it.
-        "unsupported_wayland_injection": "Text cannot be delivered to other applications: this Wayland session has no typing tool (wtype or ydotool) and no clipboard tool (wl-clipboard), so both the typing path and the clipboard fallback are unavailable. Install wl-clipboard to restore copy-to-clipboard, and wtype (or ydotool) for direct typing; then restart BetterFingers. Dictation, transcription and drafts keep working — only delivery into another window is affected.",
-        "failed_clipboard": "The clipboard manager is not responding. On Linux, ensure xclip or xsel is installed.",
-        "failed_tts_dependency": "Sound playback dependencies are missing. Ensure libsndfile1 is installed on Linux."
-    }
-
-    return {
-        "health": "active",
-        "stt": stt_info,
-        "llm": llm_info,
-        "tts": tts_info,
-        "hotkeys": hotkeys_info,
-        "models": model_path_info,
-        "audio": audio_info,
-        "platform": platform_info,
-        "injection": injection_info,
-        "hardware": hardware_info,
-        "hardware_tier": hardware_tier_info,
-        "model_fit": model_fit_info,
-        "recovery": recovery_guidelines,
-        # Config-store quarantine/downgrade-refusal events (DESIGN §9.5, M4
-        # B1/B2): a corrupt or too-new personas/voice_presets/profile/
-        # app_state file is never silently dropped or destructively
-        # overwritten -- this is the "visible warning" the downgrade policy
-        # requires, queryable here in addition to the startup log line each
-        # event already gets.
-        "store_warnings": get_degraded_events(),
-    }
-
-
-@app.get("/hardware/tier")
-async def hardware_tier():
-    return {"ok": True, "tier": get_hardware_tier()}
-
-
-@app.get("/models/recommend")
-async def models_recommend():
-    import model_recommender
-
-    report = get_hardware_report()
-    tier_info = get_hardware_tier(report=report)
-    ram_mb = (report.get("memory") or {}).get("total_mb") or 0
-    recommendation = model_recommender.recommend(tier_info["tier"], ram_mb)
-    recommendation["tier_label"] = tier_info.get("label")
-    recommendation["tier_guidance"] = tier_info.get("guidance")
-    return {"ok": True, "recommendation": recommendation}
-
-
-@app.get("/health")
-async def health_check():
-
-    engine_ready = False
-    try:
-        engine = get_engine_if_initialized()
-        engine_ready = bool(getattr(engine, "_ready", False)) if engine else False
-    except Exception:
-        pass
-
-    # Active-job visibility for the supervisor: a busy backend is not a dead
-    # backend. Everything here is in-memory — /health must stay free of model
-    # loads, device scans, and filesystem walks.
-    active_jobs = []
-    last_progress_at = None
-    try:
-        active_jobs = JOBS.list(active_only=True)
-        if active_jobs:
-            last_progress_at = max(j.get("updated_at") or 0 for j in active_jobs)
-    except Exception:
-        pass
-
-    return {
-        "status": "active",
-        "transcriber": transcriber is not None,
-        "llm_engine": engine_ready,
-        "active_job_count": len(active_jobs),
-        "active_jobs": [
-            {"id": j.get("id"), "kind": j.get("kind"), "state": j.get("state"), "updated_at": j.get("updated_at")}
-            for j in active_jobs[:5]
-        ],
-        "last_progress_at": last_progress_at,
-        # Which model runtimes currently hold a read (inference) or write
-        # (reconfigure) lease — lets the supervisor and diagnostics see live work.
-        "runtime_leases": model_runtime.active_leases(),
-    }
-
-
-class RuntimeWarmupRequest(BaseModel):
-    stt: bool = False
-    llm: bool = False
-    hotkeys: bool = False
-
-
-@app.get("/runtime/status")
-async def runtime_status():
-    return get_runtime_status_snapshot()
-
-
-@app.post("/runtime/rewrite-selection")
-async def runtime_rewrite_selection():
-    """Rewrite the current selection and open it as a review-only draft."""
-    return await run_in_threadpool(handle_selection_rewrite_shortcut)
-
-
-@app.get("/runtime/output-settings")
-async def runtime_output_settings():
-    settings: typing.Dict[str, typing.Any] = dict(get_profile_output_settings())
-    settings["pending_manual_send_ids"] = list(pending_manual_send_ids)
-    settings["supported_actions"] = ["copy_only", "paste", "type", "open_chat_then_send"]
-    settings["capabilities"] = get_capabilities()
-    return settings
-
-
-class ProfileSaveRequest(BaseModel):
-    settings: dict
-
-
-class ProfileCreateRequest(BaseModel):
-    name: str
-    settings: dict = {}
-
-
-class ProfileRenameRequest(BaseModel):
-    new_name: str
-
-
-class ProfileDuplicateRequest(BaseModel):
-    new_name: str
-
-
-class ProfileImportRequest(BaseModel):
-    kind: str = "betterfingers_profile"
-    schema_version: int = 1
-    name: str
-    settings: dict
-
-
-@app.post("/settings/profiles/import")
-async def settings_import_profile(request: ProfileImportRequest):
-    if request.kind != "betterfingers_profile":
-        raise HTTPException(status_code=400, detail="Invalid profile format: missing 'betterfingers_profile' kind.")
-    if request.schema_version != 1:
-        raise HTTPException(status_code=400, detail=f"Unsupported profile schema version: {request.schema_version}")
-
-    safe_name = sanitize_profile_name(request.name)
-    if safe_name in list_profiles():
-        raise HTTPException(status_code=409, detail="Profile name already exists")
-    
-    try:
-        save_runtime_profile(safe_name, request.settings)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Import failed: {e}")
-        
-    return get_active_profile_payload()
-
-
-@app.get("/settings/profiles")
-async def settings_profiles():
-    return get_active_profile_payload()
-
-
-@app.get("/settings/profiles/{profile_name}")
-async def settings_profile(profile_name: str):
-    safe_name = sanitize_profile_name(profile_name)
-    return {
-        "profile": safe_name,
-        "active": safe_name == get_last_active_profile(),
-        "settings": load_profile(safe_name),
-    }
-
-
-@app.post("/settings/profiles/{profile_name}")
-async def settings_save_profile(profile_name: str, request: ProfileSaveRequest):
-    safe_name = sanitize_profile_name(profile_name)
-    try:
-        save_runtime_profile(safe_name, request.settings)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Save failed: {e}")
-    residency = None
-    if safe_name == get_last_active_profile():
-        residency = apply_active_profile_runtime(safe_name).get("residency")
-    response = {
-        "profile": safe_name,
-        "active": safe_name == get_last_active_profile(),
-        "settings": load_profile(safe_name),
-    }
-    if residency is not None:
-        response["residency"] = residency
-    return response
-
-
-@app.post("/settings/profiles")
-async def settings_create_profile(request: ProfileCreateRequest):
-    safe_name = sanitize_profile_name(request.name)
-    if safe_name in list_profiles():
-        raise HTTPException(status_code=409, detail="Profile already exists")
-    base = load_profile(get_last_active_profile())
-    base.update(request.settings or {})
-    try:
-        save_runtime_profile(safe_name, base)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Create failed: {e}")
-    return {"profile": safe_name, "settings": load_profile(safe_name), "profiles": list_profiles()}
-
-
-@app.post("/settings/profiles/{profile_name}/activate")
-async def settings_activate_profile(profile_name: str):
-    safe_name = sanitize_profile_name(profile_name)
-    if safe_name not in list_profiles():
-        raise HTTPException(status_code=404, detail="Profile not found")
-    # Re-selecting the already-active profile is a no-op: skip the runtime
-    # cascade (transcriber reload, hotkey rebind, injector + LLM reconfigure),
-    # which costs 100-500 ms. Content edits to the active profile arrive via
-    # settings_save_profile, which always re-applies — so this guard can only
-    # suppress genuinely redundant switches, never a real settings change.
-    if safe_name == get_last_active_profile():
-        return get_active_profile_payload()
-    return apply_active_profile_runtime(safe_name)
-
-
-@app.delete("/settings/profiles/{profile_name}")
-async def settings_delete_profile(profile_name: str):
-    safe_name = sanitize_profile_name(profile_name)
-    if safe_name == "Default":
-        raise HTTPException(status_code=400, detail="Default profile cannot be deleted")
-    profile_path = Path(get_profiles_dir()) / f"{safe_name}.yaml"
-    if not profile_path.exists():
-        raise HTTPException(status_code=404, detail="Profile not found")
-    
-    # Check active status before unlinking the file
-    was_active = (get_last_active_profile() == safe_name)
-    profile_path.unlink()
-    
-    if was_active:
-        apply_active_profile_runtime("Default")
-    return get_active_profile_payload()
-
-
-@app.post("/settings/profiles/{profile_name}/rename")
-async def settings_rename_profile(profile_name: str, request: ProfileRenameRequest):
-    safe_old = sanitize_profile_name(profile_name)
-    safe_new = sanitize_profile_name(request.new_name)
-    if safe_old == "Default":
-        raise HTTPException(status_code=400, detail="Default profile cannot be renamed")
-    if safe_new in list_profiles():
-        raise HTTPException(status_code=409, detail="Profile already exists")
-    
-    old_path = Path(get_profiles_dir()) / f"{safe_old}.yaml"
-    if not old_path.exists():
-        raise HTTPException(status_code=404, detail="Profile not found")
-        
-    # Load and save under new name
-    data = load_profile(safe_old)
-    try:
-        save_runtime_profile(safe_new, data)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Rename failed during save: {e}")
-        
-    # Check active status before unlinking the file
-    was_active = (get_last_active_profile() == safe_old)
-    old_path.unlink()
-    
-    # If old was active, activate new
-    if was_active:
-        apply_active_profile_runtime(safe_new)
-        
-    return get_active_profile_payload()
-
-
-@app.post("/settings/profiles/{profile_name}/duplicate")
-async def settings_duplicate_profile(profile_name: str, request: ProfileDuplicateRequest):
-    safe_old = sanitize_profile_name(profile_name)
-    safe_new = sanitize_profile_name(request.new_name)
-    if safe_new in list_profiles():
-        raise HTTPException(status_code=409, detail="Profile already exists")
-        
-    if safe_old not in list_profiles():
-        raise HTTPException(status_code=404, detail="Source profile not found")
-        
-    data = load_profile(safe_old)
-    try:
-        save_runtime_profile(safe_new, data)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Duplication failed: {e}")
-        
-    return get_active_profile_payload()
-
-
-@app.get("/settings/profiles/{profile_name}/export")
-async def settings_export_profile(profile_name: str):
-    safe_name = sanitize_profile_name(profile_name)
-    if safe_name not in list_profiles():
-        raise HTTPException(status_code=404, detail="Profile not found")
-    return {
-        "kind": "betterfingers_profile",
-        "schema_version": 1,
-        "name": safe_name,
-        "settings": load_profile(safe_name),
-    }
+# Diagnostics / runtime-info routes (/runtime/version, /runtime/audio-devices*,
+# /doctor, /health, /runtime/status, /runtime/output-settings, /capabilities,
+# /audio/status, /metrics, /jobs*, /diagnostics/*, /runtime/errors) are their own
+# slice in backend/api/routes/diagnostics.py (R5); registered via
+# app.include_router at the end of this file. Their helpers and state (e.g.
+# get_audio_devices, get_runtime_status_snapshot, gather_support_report) stay here
+# and are read by the router as s.<name>.
+
+
+# Settings-profile routes (/settings/profiles/..., list/get/save/create/activate/
+# delete/rename/duplicate/export/import) and the two legacy /profile routes are
+# their own slice in backend/api/routes/settings.py (R3); its router is
+# registered at the end of this file. Their request models live there too.
 
 
 # Persona Foundry (guided interview -> compile -> stress-test) is its own vertical
@@ -3510,61 +3424,6 @@ async def settings_export_profile(profile_name: str):
 # at the end of this file, after get_selected_llm_engine and
 # get_active_completion_tokens below are defined (the test route reaches them
 # via a lazy ``import server`` at request time).
-
-
-@app.get("/capabilities")
-async def capabilities():
-    import audio_status
-    import routes_wake
-
-    payload = get_capabilities()
-    push_to_mute_available = bool(payload.get("supports_input_injection", False))
-    from backend.platform.audio_privacy import lease as privacy_lease
-    payload["voice_privacy_status"] = audio_status.voice_privacy_capability(
-        isolation_available=privacy_lease.get_lease().isolation_available(),
-        push_to_mute_available=push_to_mute_available,
-    )
-    payload["wake_status"] = audio_status.wake_capability(
-        engine_available=True,
-        classifier_available=bool(routes_wake.selected_classifier_id()),
-        # Deliberately false until a measured wake qualification exists
-        # (false accepts/rejects, latency, CPU, handoff, device recovery).
-        qualified=False,
-    )
-    return payload
-
-
-@app.get("/audio/status")
-async def audio_runtime_status():
-    import audio_input_broker
-    import audio_status
-    import routes_wake
-
-    from backend.platform.audio_privacy import lease as privacy_lease
-    lease = privacy_lease.get_lease()
-
-    config = load_profile(get_last_active_profile())
-    return audio_status.audio_status_snapshot(
-        config,
-        broker_status=audio_input_broker.get_broker().status(),
-        isolation_available=lease.isolation_available(),
-        push_to_mute_available=bool(get_capabilities().get("supports_input_injection", False)),
-        # The lease knows about both mechanisms; the injector only knows about
-        # the key. `held` is true for an isolation lease too.
-        engaged=lease.is_held(),
-        restore_complete=lease.restore_complete(),
-        enabled=bool(config.get("wake_word_enabled", False)),
-        listening=routes_wake.is_wake_listening(),
-    )
-
-
-class LlmModelSelectRequest(BaseModel):
-    model_id: str
-
-
-class WhisperModelRequest(BaseModel):
-    model_size: str
-    prefer_gpu: bool = True
 
 
 def get_selected_llm_model_id(profile_name=None):
@@ -3597,189 +3456,13 @@ def get_selected_llm_engine():
     return engine
 
 
-@app.get("/models/llm")
-async def list_llm_models():
-    selected = get_selected_llm_model_id()
-    models = []
-    for model_id, info in AVAILABLE_MODELS.items():
-        model_path = get_model_path(model_id)
-        download_state = get_download_state(model_id)
-        file_status = get_model_file_status(model_id)
-        with _llm_download_jobs_lock:
-            job = _llm_download_jobs.get(model_id)
-            download_active = bool(job and job.is_alive())
-        download_state["active"] = download_active
-        download_state["file_status"] = file_status
-        models.append(
-            {
-                "id": model_id,
-                "selected": model_id == selected,
-                "installed": check_model_exists(model_id),
-                "ready": is_llm_model_ready(model_id),
-                "path": model_path,
-                "file_status": file_status,
-                "download_state": download_state,
-                "download_active": download_active,
-                "partial_bytes": download_state.get("partial_bytes", 0),
-                "resumable": bool(download_state.get("resumable")),
-                **info,
-            }
-        )
-    return {
-        "selected_model_id": selected,
-        "models": models,
-        "download_state": get_download_state(selected),
-        "llama_server_path": get_server_path(),
-        "llama_server_exists": os.path.exists(get_server_path()),
-    }
-
-
-@app.post("/models/llm/select")
-async def select_llm_model(request: LlmModelSelectRequest, force: int = 0):
-    if request.model_id not in AVAILABLE_MODELS:
-        raise HTTPException(status_code=400, detail="Unsupported LLM model")
-    # Switching the model reconfigures the LLM runtime — take the exclusive
-    # lease so it can't race an in-flight completion (409 if busy).
-    try:
-        with model_runtime.write_lease("llm", wait=bool(force), timeout=15.0):
-            profile_name = get_last_active_profile()
-            cfg = load_profile(profile_name)
-            cfg["llm_model_id"] = request.model_id
-            save_runtime_profile(profile_name, cfg)
-            engine = get_engine_if_initialized()
-            if engine is not None:
-                engine.set_model_id(request.model_id)
-    except RuntimeBusyError:
-        raise HTTPException(status_code=409, detail="LLM is busy with active inference. Retry, or pass force=1.")
-    return await list_llm_models()
-
-
-@app.post("/models/llm/{model_id}/download")
-def download_llm_model(model_id: str):
-    if model_id not in AVAILABLE_MODELS:
-        raise HTTPException(status_code=400, detail="Unsupported LLM model")
-    with _llm_download_jobs_lock:
-        job = _llm_download_jobs.get(model_id)
-        if job and job.is_alive():
-            state = get_download_state(model_id)
-            return {
-                "ok": True,
-                "model_id": model_id,
-                "background": True,
-                "already_running": True,
-                "message": state.get("message") or "Download is already running in the background.",
-                "state": state,
-            }
-
-        def run_download():
-            try:
-                check_and_download_resources(model_id)
-            except Exception as exc:
-                logging.error("Background LLM download failed for %s: %s", model_id, exc)
-            finally:
-                with _llm_download_jobs_lock:
-                    current = _llm_download_jobs.get(model_id)
-                    if current is threading.current_thread():
-                        _llm_download_jobs.pop(model_id, None)
-
-        thread = threading.Thread(target=run_download, name=f"llm-download-{model_id}", daemon=True)
-        _llm_download_jobs[model_id] = thread
-        thread.start()
-
-    return {
-        "ok": True,
-        "model_id": model_id,
-        "background": True,
-        "message": f"Started background download for {AVAILABLE_MODELS[model_id]['name']}.",
-        "state": get_download_state(model_id),
-    }
-
-
-@app.delete("/models/llm/{model_id}")
-async def delete_llm_model(model_id: str, force: int = 0):
-    if model_id not in AVAILABLE_MODELS:
-        raise HTTPException(status_code=400, detail="Unsupported LLM model")
-    with _llm_download_jobs_lock:
-        job = _llm_download_jobs.get(model_id)
-        if job and job.is_alive():
-            raise HTTPException(status_code=409, detail="That model is downloading. Wait for it to finish or restart the app before deleting it.")
-    # Deleting model files must not race an active LLM inference reading them.
-    try:
-        with model_runtime.write_lease("llm", wait=bool(force), timeout=15.0):
-            ok, message = delete_model(model_id)
-    except RuntimeBusyError:
-        raise HTTPException(status_code=409, detail="LLM is busy with active inference. Retry, or pass force=1.")
-    return {"ok": ok, "model_id": model_id, "message": message}
-
-
-@app.get("/models/llm/{model_id}/download-state")
-async def llm_download_state(model_id: str):
-    if model_id not in AVAILABLE_MODELS:
-        raise HTTPException(status_code=400, detail="Unsupported LLM model")
-    state = get_download_state(model_id)
-    state["file_status"] = get_model_file_status(model_id)
-    with _llm_download_jobs_lock:
-        job = _llm_download_jobs.get(model_id)
-        active = bool(job and job.is_alive())
-    state["active"] = active
-    if active and state.get("status") in (None, "", "error"):
-        state["status"] = "downloading"
-    return state
-
-
-@app.get("/models/whisper")
-async def list_whisper_models():
-    selected = str(load_profile(get_last_active_profile()).get("model_size", "base.en") or "base.en").strip()
-    return {
-        "selected_model_size": selected,
-        "supported": list(SUPPORTED_MODEL_SIZES),
-        "models": list_cached_models(),
-        "download_state": get_whisper_download_state(selected),
-    }
-
-
-@app.post("/models/whisper/download")
-def download_whisper(request: WhisperModelRequest):
-    result = download_whisper_model(request.model_size, prefer_gpu=request.prefer_gpu)
-    return result
-
-
-@app.delete("/models/whisper/{model_size}")
-async def delete_whisper(model_size: str):
-    result = remove_cached_model(model_size)
-    if transcriber is not None and getattr(transcriber, "model_size", "") == model_size:
-        transcriber.unload()
-    return result
-
-
-@app.post("/models/whisper/test")
-def test_whisper(request: WhisperModelRequest):
-    if request.model_size not in SUPPORTED_MODEL_SIZES:
-        return {"ok": False, "message": f"Unsupported Whisper model: {request.model_size}"}
-    try:
-        probe = Transcriber(profile_name=get_last_active_profile(), preload=False)
-        probe.model_size = request.model_size
-        ok = probe.ensure_loaded()
-        probe.unload()
-        return {"ok": bool(ok), "message": f"Whisper {request.model_size} {'loaded' if ok else 'failed to load'}."}
-    except Exception as exc:
-        logging.exception("Whisper test failed")
-        return {"ok": False, "message": str(exc)}
-
-
-@app.post("/models/whisper/select")
-async def select_whisper_model(request: WhisperModelRequest):
-    if request.model_size not in SUPPORTED_MODEL_SIZES:
-        raise HTTPException(status_code=400, detail="Unsupported Whisper model")
-    # The active Whisper model is the active profile's `model_size`; persist the
-    # choice there and reload the live transcriber so it takes effect immediately.
-    profile_name = get_last_active_profile()
-    cfg = load_profile(profile_name)
-    cfg["model_size"] = request.model_size
-    save_runtime_profile(profile_name, cfg)
-    if transcriber is not None:
-        transcriber.reload_profile(profile_name)
-    return await list_whisper_models()
+# Model-management routes (/hardware/tier, /models/recommend, /models/llm*,
+# /models/whisper*, /models/unload/{component}) are their own slice in
+# backend/api/routes/models.py (R6); registered via app.include_router at the end
+# of this file, as is /models/resources in models_resources.py. The helpers and
+# state they use stay here and are read by the router as s.<name>; in particular
+# _unload_model_component_locked below owns the `global transcriber, tts_engine`
+# rebinding, and the router's /models/unload/{component} just calls it.
 
 
 def _unload_model_component_locked(component: str):
@@ -3831,7 +3514,7 @@ def _unload_model_component_locked(component: str):
                         logging.debug(f"LLM {method}() failed: {exc}")
             # Drop the module-level singleton so the wrapper can be collected.
             try:
-                import llm_engine
+                from backend.llm import llm_engine
 
                 llm_engine._engine_instance = None
             except Exception as exc:
@@ -3867,65 +3550,6 @@ def _unload_model_component_locked(component: str):
         }
 
     raise HTTPException(status_code=400, detail="Unsupported component")
-
-
-@app.post("/models/unload/{component}")
-async def unload_model_component(component: str, force: int = 0):
-    """Release a model component's memory under an exclusive runtime lease.
-
-    Returns 409 if inference is active on that runtime (a destructive drop must
-    not race an in-flight request); pass ?force=1 to cancel-and-wait for active
-    inference to drain first.
-    """
-    normalized = component.strip().lower()
-    if normalized not in ("stt", "llm", "tts"):
-        raise HTTPException(status_code=400, detail="Unsupported component")
-    try:
-        with model_runtime.write_lease(normalized, wait=bool(force), timeout=15.0):
-            return await run_in_threadpool(_unload_model_component_locked, normalized)
-    except RuntimeBusyError:
-        raise HTTPException(
-            status_code=409,
-            detail=f"{normalized.upper()} is in use by active inference. Retry, or pass force=1 to wait.",
-        )
-
-
-@app.get("/metrics")
-async def pipeline_metrics_endpoint():
-    return get_pipeline_metrics_summary()
-
-
-@app.get("/jobs")
-async def list_jobs_endpoint(active: int = 0):
-    """Central job registry (§6.3): what work is running or recently finished."""
-    return {
-        "ok": True,
-        "jobs": JOBS.list(active_only=bool(active)),
-        "runtime_leases": model_runtime.active_leases(),
-    }
-
-
-@app.get("/jobs/{job_id}")
-async def get_job_endpoint(job_id: str):
-    job = JOBS.get(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Job not found")
-    return {"ok": True, "job": job.to_public()}
-
-
-@app.post("/jobs/{job_id}/cancel")
-async def cancel_job_endpoint(job_id: str):
-    job = JOBS.get(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Job not found")
-    JOBS.request_cancel(job_id)
-    # For the active dictation job, also trip the pipeline's cancellation event so
-    # the DictationPipeline's per-stage cancellation check (via
-    # JobManagerCancellationBridge) unwinds process_recording_result promptly.
-    if job_id == _active_dictation_job_id:
-        cancellation_event.set()
-    updated = JOBS.get(job_id)
-    return {"ok": True, "job": updated.to_public() if updated else None}
 
 
 def _path_size_bytes(path):
@@ -4008,7 +3632,7 @@ def _persona_learning_disclosure():
         "controls": {
             "inspect": "GET /personas/{name}/examples",
             "delete_one": "DELETE /personas/{name}/examples/{example_id}",
-            "clear_persona": "DELETE /personas/{name}/examples",
+            "clear_persona": "DELETE /personas/{name}/examples?confirm=true",
             # Deliberately in the privacy namespace, not /personas/examples:
             # that path is shadowed by the existing DELETE /personas/{name}
             # (both are two segments), so a clear-all registered there would
@@ -4101,51 +3725,14 @@ def _build_privacy_export():
     }
 
 
-@app.get("/privacy/export")
-async def privacy_export():
-    """Export the user's own data — one bundle, generated from the registry."""
-    return await run_in_threadpool(_build_privacy_export)
-
-
-@app.delete("/privacy/persona-learning")
-async def privacy_clear_persona_learning():
-    """Delete every learned example for every persona, then verify.
-
-    Goes through the registry's category wipe (which goes through
-    PersonaLearningStore.clear_all()) rather than unlinking the file, so the
-    store's atomic-write and dedupe invariants hold and the result is checked
-    by re-reading rather than trusted. Keys are dropped, not blacklisted — a
-    later approved example recreates them.
-    """
-    category = data_categories.get_registry().get("persona_learning")
-
-    def _clear():
-        wipe = category.wipe()
-        verification = category.verify()
-        return {
-            "ok": verification.ok,
-            "wiped": wipe.ok,
-            "message": (wipe.message if verification.ok else
-                        "Examples remain after clearing; nothing is being claimed "
-                        "that did not happen."),
-            "remaining": verification.remaining,
-            "detail": verification.detail,
-        }
-
-    result = await run_in_threadpool(_clear)
-    return JSONResponse(status_code=200 if result["ok"] else 500, content=result)
-
-
-@app.get("/privacy/persona-learning/verify")
-async def privacy_persona_learning_verify():
-    """Prove the learned-examples store is empty by re-reading it.
-
-    "Clear all" returning ok is the store's claim about its own write; this is
-    the independent check the privacy screen shows next to it.
-    """
-    category = data_categories.get_registry().get("persona_learning")
-    result = category.verify()
-    return {"ok": result.ok, "remaining": result.remaining, "detail": result.detail}
+# Privacy routes (/privacy, /privacy/export, /privacy/wipe, /privacy/modes,
+# /privacy/factory-reset[/verify], /privacy/persona-learning[/verify]) are their own
+# slice in backend/api/routes/privacy.py (R9); registered via app.include_router at
+# the end of this file. ONLY the thin handlers and their two request models moved:
+# _perform_privacy_wipe, _perform_factory_reset, the quiescence guards
+# (privacy_wipe_in_progress, output_coordinator, _reject_if_wiping, _drain_*),
+# get_privacy_report, _build_privacy_export, _wipe_status_code/_WIPE_ERROR_STATUS and
+# FACTORY_RESET_CONFIRMATION all stay here and are read by the router as s.<name>.
 
 
 def get_privacy_report():
@@ -4199,8 +3786,8 @@ def get_privacy_report():
         {"name": "Models", "path": str(get_models_dir()), "bytes": _path_size_bytes(str(get_models_dir()))},
     ]
 
-    import app_paths
-    import routes_wake
+    from backend.config import app_paths
+    from backend.api.routes import wake as routes_wake
 
     # Wave 6 (Gate 6): the authoritative store table, generated from the data
     # registry. `data_locations` above is the six-entry summary the current
@@ -4261,28 +3848,6 @@ def get_privacy_report():
             "draft_history_limit": MAX_DRAFT_HISTORY,
         },
     }
-
-
-@app.get("/privacy")
-async def privacy_report():
-    return get_privacy_report()
-
-
-class PrivacyWipeRequest(BaseModel):
-    wipe_voices: bool = False
-    # Defaults to the lightest mode, which is exactly what the shipped button
-    # has always done. Widening the default would silently delete personas,
-    # dictionaries and macros for anyone whose client predates this field.
-    mode: str = data_registry.WIPE_MODE_CONVERSATIONS
-
-
-class FactoryResetRequest(BaseModel):
-    """A factory reset is unrecoverable, so the request has to carry proof the
-    user meant it. ``confirm`` must be the exact phrase — a boolean flag is
-    one stray ``true`` in a client away from erasing an install."""
-
-    confirm: str = ""
-    delete_downloaded_models: bool = False
 
 
 FACTORY_RESET_CONFIRMATION = "DELETE EVERYTHING"
@@ -4349,7 +3914,7 @@ def _drain_tts_and_clone(timeout=TTS_DRAIN_TIMEOUT_SECONDS):
     deleting — a live synthesis or conversion could still hold user
     text/audio.
     """
-    import voice_clone_engine
+    from backend.tts import voice_clone_engine
 
     results = {
         "tts_playback_stopped": True,
@@ -4420,6 +3985,10 @@ def _perform_privacy_wipe(wipe_voices: bool, mode: str = data_registry.WIPE_MODE
         return {"ok": False, "error": "wipe_already_running",
                 "message": "A privacy wipe is already in progress."}
     privacy_wipe_in_progress.set()
+    # Close setup issuance before any slow quiescence work. A preflight that
+    # began just before the wipe can finish evaluating, but its atomic issue()
+    # step will fail rather than repopulating the registry behind the wipe.
+    wake_setup_registry.WAKE_SETUP_REGISTRY.suspend_issuance()
     cleared = {}
     postconditions = {}
     gate_held = False
@@ -4429,7 +3998,7 @@ def _perform_privacy_wipe(wipe_voices: bool, mode: str = data_registry.WIPE_MODE
         #    consumer) -- before draining the recorder, so no audio consumer
         #    is left running while we quiesce the rest of the pipeline.
         #    Idempotent/no-op-safe: True even if wake word was never enabled.
-        import routes_wake
+        from backend.api.routes import wake as routes_wake
         cleared["wake_listener_stopped"] = bool(routes_wake.stop_wake_listener())
         # The pre-trigger ring is the only place in the wake pipeline where raw
         # audio lives at all, so "no retained audio" has to include it.
@@ -4438,7 +4007,7 @@ def _perform_privacy_wipe(wipe_voices: bool, mode: str = data_registry.WIPE_MODE
         cleared["wake_pretrigger_wiped"] = bool(routes_wake.wipe_wake_pretrigger())
         # Quiesce the shared capture stream unconditionally: "no live capture"
         # must hold without knowing who was holding the broker.
-        import audio_input_broker
+        from backend.audio import audio_input_broker
         audio_input_broker.get_broker().stop_all()
         # And release voice privacy: a wipe must not leave another
         # application's capture stream muted by a lease nothing will release.
@@ -4520,6 +4089,12 @@ def _perform_privacy_wipe(wipe_voices: bool, mode: str = data_registry.WIPE_MODE
             draft_queue.clear()
             draft_recordings.clear()
             pending_manual_send_ids.clear()
+        # Phrase setup candidates contain the user's chosen wake phrase. They
+        # are process-local rather than part of the on-disk data registry, so
+        # wipe the server-owned registry explicitly and report the exact count.
+        cleared["wake_setup_candidates_cleared"] = (
+            wake_setup_registry.WAKE_SETUP_REGISTRY.clear()
+        )
         save_draft_history()
 
         # 5. Delete on-disk stores (final sweep — callbacks/workers are drained).
@@ -4628,6 +4203,9 @@ def _perform_privacy_wipe(wipe_voices: bool, mode: str = data_registry.WIPE_MODE
             "tts_playback_stopped": cleared["tts_playback_stopped"],
             "voice_clone_conversion_idle": cleared["voice_clone_conversion_idle"],
             "voice_cache_cleared": cleared["voice_cache_cleared"],
+            "wake_setup_candidates_empty": (
+                len(wake_setup_registry.WAKE_SETUP_REGISTRY) == 0
+            ),
             "message_rescue_context_cleared": cleared["message_rescue_context_cleared"],
             "persona_examples_cleared": cleared["persona_examples_cleared"],
             # A postcondition, not just a report line: `ok` below is computed
@@ -4643,6 +4221,7 @@ def _perform_privacy_wipe(wipe_voices: bool, mode: str = data_registry.WIPE_MODE
         if gate_held:
             dictation_coordinator.finish()
         privacy_wipe_in_progress.clear()
+        wake_setup_registry.WAKE_SETUP_REGISTRY.resume_issuance()
 
     ok = all(v for k, v in postconditions.items() if k != "leftover_recordings")
     broadcast_status_threadsafe("draft_history_cleared")
@@ -4674,42 +4253,6 @@ def _wipe_status_code(result: dict) -> int:
     if result.get("ok"):
         return 200
     return _WIPE_ERROR_STATUS.get(result.get("error"), 500)
-
-
-@app.post("/privacy/wipe")
-async def privacy_wipe(request: PrivacyWipeRequest = PrivacyWipeRequest()):
-    """Delete app-generated conversational data: drafts, the draft-history
-    file, the searchable history database (C8), and persisted raw-audio
-    recordings (C6), plus in-memory queues. Also drains any active TTS
-    playback and voice-clone conversion and clears the synthesized-audio
-    cache unconditionally (it holds spoken user text regardless of the
-    wipe_voices toggle). Models and profiles are intentionally NOT touched;
-    cloned voice samples are removed only when explicitly requested. Note:
-    without at-rest encryption this is logical deletion — nothing readable
-    remains through the app or its files, but SSD-level forensic erasure is
-    not promised.
-
-    Returns an honest HTTP status (see _wipe_status_code): a wipe that did not
-    fully succeed never reports 200."""
-    result = await run_in_threadpool(_perform_privacy_wipe, request.wipe_voices, request.mode)
-    return JSONResponse(status_code=_wipe_status_code(result), content=result)
-
-
-@app.get("/privacy/modes")
-async def privacy_wipe_modes():
-    """What each mode would delete, right now, with real sizes.
-
-    The confirmation dialog reads this instead of carrying its own copy of the
-    list. That is the whole point: the sentence the user agrees to and the
-    sweep that runs are generated from one inventory.
-    """
-    registry = data_categories.get_registry()
-    return {
-        "ok": True,
-        "modes": {mode: data_lifecycle.preview_mode(registry, mode)
-                  for mode in sorted(data_registry.WIPE_MODES)},
-        "factory_reset_confirmation": FACTORY_RESET_CONFIRMATION,
-    }
 
 
 def _perform_factory_reset(delete_downloaded_models: bool):
@@ -4748,149 +4291,15 @@ def _perform_factory_reset(delete_downloaded_models: bool):
     }
 
 
-@app.post("/privacy/factory-reset")
-async def privacy_factory_reset(request: FactoryResetRequest):
-    """Erase every declared store — Python-owned and Electron-owned — and then
-    prove it by re-reading the disk.
-
-    ``data_registry`` has declared WIPE_MODE_FACTORY_RESET since phase 2.1 and
-    nothing performed it; this is that executor. Requires the exact
-    confirmation phrase (see FactoryResetRequest) because it is unrecoverable:
-    it removes the onboarding consent record, the overlay state, application
-    profiles, workflows, personas, dictionaries, macros and settings, not only
-    conversation data.
-    """
-    if request.confirm != FACTORY_RESET_CONFIRMATION:
-        return JSONResponse(status_code=400, content={
-            "ok": False, "error": "confirmation_required",
-            "message": (f"A factory reset requires confirm={FACTORY_RESET_CONFIRMATION!r}. "
-                        "Nothing was deleted."),
-        })
-    result = await run_in_threadpool(_perform_factory_reset,
-                                     request.delete_downloaded_models)
-    status = 200 if result.get("ok") else _WIPE_ERROR_STATUS.get(result.get("error"), 500)
-    return JSONResponse(status_code=status, content=result)
-
-
-@app.get("/privacy/factory-reset/verify")
-async def privacy_factory_reset_verify():
-    """Re-read the disk and report whether a factory reset actually landed.
-
-    Deliberately a separate GET with no deletion path: the Settings surface
-    offers "check again" after a failed reset, and a user re-checking must not
-    be able to trigger a second erase.
-    """
-    registry = data_categories.get_registry()
-    return await run_in_threadpool(data_lifecycle.verify_factory_reset, registry)
-
-
-@app.get("/mcp/status", dependencies=[Depends(_require_dev_routes)])
-async def mcp_status():
-    return mcp_client.status()
-
-
-@app.get("/mcp/servers", dependencies=[Depends(_require_dev_routes)])
-async def mcp_servers():
-    return {"ok": True, "servers": mcp_client.list_servers()}
-
-
-@app.get("/mcp/servers/{server_name}/tools", dependencies=[Depends(_require_dev_routes)])
-async def mcp_server_tools(server_name: str):
-    try:
-        return await run_in_threadpool(mcp_client.list_tools, server_name)
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc))
-    except KeyError:
-        raise HTTPException(status_code=404, detail=f"MCP server '{server_name}' is not configured.")
-    except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc))
-
-
-@app.get("/recordings")
-async def list_recordings_endpoint():
-    return {"ok": True, "recordings": recordings.list_recordings()}
-
-
-@app.post("/recordings/{rec_id}/retranscribe")
-async def retranscribe_recording(rec_id: str):
-    # A recording id becomes a filename; reject anything path-shaped (§10).
-    if not recordings.is_valid_rec_id(rec_id):
-        raise HTTPException(status_code=400, detail="Invalid recording id.")
-    import numpy as np
-    from recorder import RecordingResult
-
-    audio, sample_rate = recordings.load_recording_audio(rec_id)
-    if audio is None:
-        raise HTTPException(status_code=404, detail="Recording not found.")
-
-    audio = np.asarray(audio, dtype=np.float32)
-    rr = RecordingResult(
-        audio_data=audio,
-        sample_rate=int(sample_rate or 16000),
-        duration_seconds=len(audio) / float(sample_rate or 16000),
-        frame_count=0,
-        sample_count=int(audio.size),
-        max_amplitude=float(np.max(np.abs(audio))) if audio.size else 0.0,
-        rms_amplitude=float(np.sqrt(np.mean(np.square(audio)))) if audio.size else 0.0,
-        stop_reason="recovery",
-    )
-    draft = await run_in_threadpool(process_recording_result, rr)
-    if draft is None:
-        raise HTTPException(status_code=409, detail="A dictation is already processing; try again shortly.")
-    return {"ok": True, "draft": draft}
-
-
-@app.delete("/recordings/{rec_id}")
-async def delete_recording_endpoint(rec_id: str):
-    if not recordings.is_valid_rec_id(rec_id):
-        raise HTTPException(status_code=400, detail="Invalid recording id.")
-    removed = recordings.delete_recording(rec_id)
-    return {"ok": True, "removed": removed}
-
-
-@app.delete("/recordings")
-async def clear_recordings_endpoint():
-    count = recordings.clear_recordings()
-    return {"ok": True, "cleared": count}
+# Recordings (/recordings: list, retranscribe, delete one, delete all) and
+# searchable-history (/history, /history/search) routes are their own slice in
+# backend/api/routes/history.py (R4); registered via app.include_router at the
+# end of this file. The `recordings` and `history_store` modules and
+# process_recording_result stay here and are read by the router as s.<name>.
 
 
 # Dictionary / macros / voice-preset routes are their own slice in
 # routes_user_config.py (M6); registered via app.include_router at the end.
-
-
-@app.get("/history/search")
-async def history_search(q: str = "", limit: int = 50):
-    limit = max(1, min(200, int(limit or 50)))
-    results = history_store.search(q, limit=limit)
-    return {"ok": True, "query": q, "count": len(results), "results": results}
-
-
-@app.get("/history")
-async def history_recent(limit: int = 50):
-    limit = max(1, min(200, int(limit or 50)))
-    results = history_store.recent(limit=limit)
-    return {"ok": True, "count": len(results), "total": history_store.count(), "results": results}
-
-
-@app.delete("/history")
-async def history_clear():
-    ok = history_store.clear()
-    return {"ok": ok, "message": "Searchable history cleared." if ok else "Could not clear history."}
-
-
-@app.get("/diagnostics/logs")
-async def diagnostics_logs(lines: int = 120):
-    return read_log_tail(lines)
-
-
-@app.get("/diagnostics/paths")
-async def diagnostics_paths():
-    return get_runtime_paths_snapshot()
-
-
-@app.get("/runtime/errors")
-async def runtime_errors():
-    return {"errors": get_runtime_error_history()}
 
 
 def gather_support_report():
@@ -4903,7 +4312,7 @@ def gather_support_report():
     """
     import platform as _platform
 
-    import support_report
+    from backend.services import support_report
 
     generated_at = datetime.now(timezone.utc).isoformat()
 
@@ -4971,8 +4380,8 @@ def gather_support_report():
     stt_status = _transcriber_status_snapshot(stt)
     stt_info = {
         "initialized": stt is not None,
-        "loaded": bool(getattr(stt, "model", None)) if stt is not None else False,
-        "model_size": getattr(stt, "model_size", None) if stt is not None else None,
+        "loaded": stt_status.get("constructed", False),
+        "model_size": stt_status.get("model_size", getattr(stt, "model_size", None)),
         "constructed": stt_status.get("constructed", False),
         "probe_passed": stt_status.get("probe_passed", False),
         "inference_ready": stt_status.get("inference_ready", False),
@@ -4982,14 +4391,12 @@ def gather_support_report():
         "compute_type": stt_status.get("active_compute_type"),
         "device_fallback_reason": stt_status.get("device_fallback_reason"),
         "device_fallback_code": stt_status.get("device_fallback_code"),
+        "using_cpu_fallback": bool(stt_status.get("using_cpu_fallback", False)),
     }
 
     tts = tts_engine
-    tts_info = {
-        "initialized": tts is not None,
-        "loaded": bool(tts.is_loaded()) if (tts is not None and hasattr(tts, "is_loaded")) else False,
-        "backend": tts.backend() if (tts is not None and hasattr(tts, "backend")) else "none",
-    }
+    tts_snapshot = _snapshot_tts_status(tts)
+    tts_info = {key: tts_snapshot[key] for key in ("initialized", "loaded", "backend")}
 
     runtime = {
         "llm": {
@@ -5030,136 +4437,14 @@ def gather_support_report():
     }
 
 
-@app.get("/diagnostics/support-report")
-async def diagnostics_support_report():
-    """One-click support report (Markdown) for alpha testers — no telemetry
-    means this is how a tester hands us diagnostics. Runs off the event loop
-    since it touches the filesystem and may shell out to llama-server --version."""
-    return await run_in_threadpool(gather_support_report)
-
-
-@app.get("/drafts")
-async def list_drafts():
-    with draft_lock:
-        return {"drafts": [dict(draft) for draft in draft_queue]}
-
-
-@app.get("/drafts/latest")
-async def latest_draft():
-    with draft_lock:
-        if not draft_queue:
-            return {"draft": None}
-        return {"draft": dict(draft_queue[-1])}
-
-
-@app.delete("/drafts")
-def clear_draft_history():
-    with draft_lock:
-        draft_queue.clear()
-        draft_recordings.clear()
-        pending_manual_send_ids.clear()
-    save_draft_history()
-    broadcast_status_threadsafe("draft_history_cleared")
-    return {"ok": True, "message": "Draft history cleared."}
-
-
-@app.post("/drafts/test-mock")
-def create_mock_draft(status: str = "pending", raw: str = "Mock raw transcript text.", final: str = "Mock cleaned and polished output."):
-    if os.getenv("BETTERFINGERS_ENV", "development") == "production":
-        raise HTTPException(status_code=403, detail="Mock endpoints are disabled in production.")
-    
-    metadata = {
-        "duration_seconds": 3.45,
-        "sample_rate": 16000,
-        "sample_count": 55200,
-        "max_amplitude": 0.35,
-        "rms_amplitude": 0.08,
-        "stop_reason": "manual"
-    }
-    draft = create_draft(raw, final, preset="True Janitor", status=status, metadata=metadata)
-    broadcast_status_threadsafe("preview_ready", {
-        "draft_id": draft["id"],
-        "raw_text": draft["raw_text"],
-        "final_text": draft["final_text"],
-        "token_count": draft["token_count"],
-        "token_limit": draft["token_limit"],
-        "long_text": draft["long_text"],
-    })
-    return draft
-
-
-
-@app.post("/drafts/{draft_id}/accept")
-async def accept_draft(draft_id: int):
-    with draft_lock:
-        for draft in draft_queue:
-            if draft["id"] == draft_id:
-                draft["status"] = "accepted"
-                mark_draft_pending_send(draft)
-                response = dict(draft)
-                break
-        else:
-            raise HTTPException(status_code=404, detail="Draft not found")
-    save_draft_history(changed_draft_id=draft_id)
-    broadcast_status_threadsafe("draft_accepted", {"draft_id": draft_id, "pending_send": True})
-    return response
-
-
-@app.post("/drafts/{draft_id}/decline")
-async def decline_draft(draft_id: int):
-    with draft_lock:
-        for draft in draft_queue:
-            if draft["id"] == draft_id:
-                draft["status"] = "declined"
-                draft["pending_send"] = False
-                while draft_id in pending_manual_send_ids:
-                    pending_manual_send_ids.remove(draft_id)
-                response = dict(draft)
-                break
-        else:
-            raise HTTPException(status_code=404, detail="Draft not found")
-    save_draft_history(changed_draft_id=draft_id)
-    broadcast_status_threadsafe("draft_declined", {"draft_id": draft_id})
-    return response
-
-
-@app.post("/drafts/{draft_id}/retry")
-async def retry_draft(draft_id: int):
-    with draft_lock:
-        recording_result = draft_recordings.get(draft_id)
-
-    if recording_result is None:
-        raise HTTPException(status_code=409, detail="No recording data is available for this draft")
-
-    # Blocking model pipeline must not run on the event loop (it would starve
-    # /health and trip Electron's restart watchdog).
-    draft = await run_in_threadpool(process_recording_result, recording_result)
-    if draft is None:
-        raise HTTPException(status_code=409, detail="A dictation is already processing; try again shortly.")
-    return draft
-
-
-class DraftEditRequest(BaseModel):
-    final_text: str
-
-
-class DraftRewriteRequest(BaseModel):
-    action: str = "clearer"
-    custom_instruction: str = ""
-
-
-class DraftTtsRequest(BaseModel):
-    text: str = ""
-    voice_id: Optional[str] = None
-    speed: Optional[float] = None
-    pitch: Optional[float] = None
-    blend: Optional[dict] = None
-    energy: Optional[float] = None
-    warmth: Optional[float] = None
-    brightness: Optional[float] = None
-    pause_style: Optional[str] = None
-    preset_name: Optional[str] = None
-    persona: Optional[str] = None
+# Draft routes (/drafts, /drafts/latest, /drafts/test-mock, /drafts/{id}/accept|
+# decline|retry|edit|contact|rewrite|tts|send) are their own slice in
+# backend/api/routes/drafts.py (R8); registered via app.include_router at the end
+# of this file. Draft state (draft_queue, draft_lock, pending_manual_send_ids,
+# next_draft_id, ...) and the helpers that rebind it under `global` stay here and
+# are read by the router as s.<name>. execute_voice_command (now in runtime.py)
+# reaches the decline/rewrite/retry handlers and DraftRewriteRequest through
+# routes_drafts.
 
 
 def _find_voice_preset(name, presets=None):
@@ -5216,7 +4501,7 @@ def _resolve_voice_and_modulation(request, config):
 
     persona_name = str(getattr(request, "persona", "") or "").strip()
     if persona_name:
-        from llm_engine import get_persona
+        from backend.llm.llm_engine import get_persona
         persona = get_persona(persona_name)
         persona_voice = (persona or {}).get("voice", {}) or {}
         has_voice_identity = bool(str(persona_voice.get("base", "") or "").strip()) or bool(
@@ -5325,867 +4610,12 @@ def rewrite_draft_text(text, action, custom_instruction=""):
     return engine.process_fast_lane(prompt, "True Janitor", chunk_size=llm_chunk_size) or clean_text
 
 
-@app.post("/drafts/{draft_id}/edit")
-async def edit_draft(draft_id: int, request: DraftEditRequest):
-    with draft_lock:
-        draft = get_draft_by_id(draft_id)
-        if draft is None:
-            raise HTTPException(status_code=404, detail="Draft not found")
-
-        draft["final_text"] = request.final_text or ""
-        if draft.get("status") in {"accepted", "declined", "sent", "send_error"}:
-            draft["status"] = "pending"
-            draft["pending_send"] = False
-            while draft_id in pending_manual_send_ids:
-                pending_manual_send_ids.remove(draft_id)
-        else:
-            draft["status"] = draft.get("status", "pending")
-        draft["error"] = ""
-        draft["updated_at"] = datetime.now(timezone.utc).isoformat()
-        update_draft_review_fields(draft)
-        response = dict(draft)
-
-    save_draft_history(changed_draft_id=draft_id)
-    broadcast_status_threadsafe(
-        "draft_updated",
-        {
-            "draft_id": response["id"],
-            "final_text": response["final_text"],
-            "token_count": response["token_count"],
-            "token_limit": response["token_limit"],
-            "long_text": response["long_text"],
-        },
-    )
-    return response
-
-
-class DraftContactRequest(BaseModel):
-    contact_id: str = ""
-
-
-@app.post("/drafts/{draft_id}/contact")
-async def set_draft_contact(draft_id: int, request: DraftContactRequest):
-    """Apply (or clear) a contact on an existing draft.
-
-    Recording the audience after the fact is the same act as recording it at
-    dictation time -- it is metadata about who the message is for, and it is
-    what lets Library resolve a name on the card. It does NOT re-run cleanup:
-    the draft text was produced without that context and rewriting it here
-    would change the user's words behind their back.
-
-    An empty contact_id clears the field. A non-empty one must name a contact
-    that exists, so a deleted contact cannot be re-attached by id.
-    """
-    contact_id = (request.contact_id or "").strip()
-    if contact_id:
-        from backend.services.contacts import ContactStore
-        if ContactStore().get(contact_id) is None:
-            raise HTTPException(status_code=404, detail=f"Contact '{contact_id}' not found.")
-
-    with draft_lock:
-        draft = get_draft_by_id(draft_id)
-        if draft is None:
-            raise HTTPException(status_code=404, detail="Draft not found")
-        draft["contact_id"] = contact_id or None
-        draft["updated_at"] = datetime.now(timezone.utc).isoformat()
-        response = dict(draft)
-
-    save_draft_history(changed_draft_id=draft_id)
-    return response
-
-
-@app.post("/drafts/{draft_id}/rewrite")
-async def rewrite_draft(draft_id: int, request: DraftRewriteRequest):
-    with draft_lock:
-        draft = get_draft_by_id(draft_id)
-        if draft is None:
-            raise HTTPException(status_code=404, detail="Draft not found")
-        source_text = draft.get("final_text") or draft.get("raw_text") or ""
-
-    action_key, _instruction = get_rewrite_instruction(request.action, request.custom_instruction)
-    try:
-        broadcast_status_threadsafe("draft_rewriting", {"draft_id": draft_id, "action": action_key})
-        rewritten = str(rewrite_draft_text(source_text, action_key, request.custom_instruction) or source_text).strip()
-        with draft_lock:
-            draft = get_draft_by_id(draft_id)
-            if draft is None:
-                raise HTTPException(status_code=404, detail="Draft not found")
-            draft["final_text"] = rewritten
-            draft["status"] = "pending"
-            draft["error"] = ""
-            draft["rewrite_action"] = action_key
-            draft["updated_at"] = datetime.now(timezone.utc).isoformat()
-            update_draft_review_fields(draft)
-            response = dict(draft)
-        save_draft_history(changed_draft_id=draft_id)
-        broadcast_status_threadsafe(
-            "draft_rewritten",
-            {
-                "draft_id": response["id"],
-                "action": action_key,
-                "final_text": response["final_text"],
-                "token_count": response["token_count"],
-                "token_limit": response["token_limit"],
-                "long_text": response["long_text"],
-            },
-        )
-        return response
-    except HTTPException:
-        raise
-    except Exception as exc:
-        logging.error(f"Draft rewrite failed: {redact_exc(exc)}")
-        record_runtime_error("review", str(exc), {"action": "rewrite", "draft_id": draft_id})
-        broadcast_status_threadsafe("draft_rewrite_error", {"draft_id": draft_id, "action": action_key, "error": str(exc)})
-        return {
-            "ok": False,
-            "draft_id": draft_id,
-            "action": action_key,
-            "error": str(exc),
-            "draft": dict(get_draft_by_id(draft_id) or {}),
-        }
-
-
-@app.post("/drafts/{draft_id}/tts")
-async def speak_draft(draft_id: int, request: DraftTtsRequest):
-    wiping = _reject_if_wiping("draft TTS")
-    if wiping:
-        return {"draft_id": draft_id, **wiping}
-    with draft_lock:
-        draft = get_draft_by_id(draft_id)
-        if draft is None:
-            raise HTTPException(status_code=404, detail="Draft not found")
-        text = (request.text or draft.get("final_text") or draft.get("raw_text") or "").strip()
-
-    if not text:
-        return {"ok": False, "draft_id": draft_id, "message": "No draft text is available to read aloud.", "error": "empty_text"}
-
-    profile_name = get_last_active_profile()
-    try:
-        config = load_profile(profile_name)
-    except Exception:
-        config = {}
-
-    voice_id, speed, blend, modulation = _resolve_voice_and_modulation(request, config)
-    logging.info(f"Draft TTS Request: draft={draft_id} {redact_user_text(text)} | Voice: {voice_id} | Speed: {speed}x")
-
-    engine = await run_in_threadpool(ensure_tts_initialized)
-    if engine is None:
-        result = {
-            "ok": False,
-            "status": "error",
-            "draft_id": draft_id,
-            "message": "TTS engine is not available.",
-            "error": "tts_unavailable",
-            "text_length": len(text),
-        }
-        record_runtime_error("tts", result["message"], {"action": "draft_tts", "draft_id": draft_id})
-        return result
-
-    try:
-        with model_runtime.read_lease("tts"):
-            result = await run_in_threadpool(
-                engine.speak, text, speed=speed, voice_hint=voice_id, blend=blend, modulation=modulation
-            )
-    except RuntimeBusyError:
-        return {"ok": False, "status": "error", "draft_id": draft_id,
-                "error": "tts_reconfiguring", "message": "TTS runtime is being reconfigured; retry shortly."}
-    result.update(
-        {
-            "status": "success" if result.get("ok") else "error",
-            "draft_id": draft_id,
-            "text_length": len(text),
-        }
-    )
-    broadcast_status_threadsafe("draft_tts_requested", {"draft_id": draft_id, "text_length": len(text)})
-    return result
-
-
-class DraftSendRequest(BaseModel):
-    action: str = "copy_only"
-    open_chat: bool = False
-    allow_resend: bool = False
-
-
-@app.post("/drafts/{draft_id}/send")
-async def send_draft(draft_id: int, request: DraftSendRequest = DraftSendRequest()):
-    return send_draft_by_id(
-        draft_id,
-        action=request.action,
-        open_chat=request.open_chat,
-        allow_resend=request.allow_resend,
-    )
-
-
-class VoiceCommandExecuteRequest(BaseModel):
-    text: str
-    draft_id: Optional[int] = None
-    context: dict = {}
-    confirm: bool = False
-
-
-_REWRITE_ACTION_FOR = {"rewrite_shorter": "shorter", "rewrite_clearer": "clearer"}
-_DRAFT_DEPENDENT_ACTIONS = {"cancel", "send", "copy", "read_back", "retry", *_REWRITE_ACTION_FOR}
-
-
-@app.post("/voice-commands/execute")
-async def execute_voice_command(request: VoiceCommandExecuteRequest):
-    """Real trigger point for app-control voice commands (task 9): classify
-    `text` via voice_commands.parse_command, then execute the resolved
-    action against the existing draft/runtime functions. `emergency_stop`
-    always executes; anything else with requires_confirmation=True only
-    executes when `confirm=True` is sent as a follow-up call."""
-    if not app_commands_enabled():
-        return {"ok": False, "reason": "disabled"}
-
-    intent = voice_commands.parse_command(request.text, request.context)
-    if intent is None:
-        return {"ok": False, "reason": "no_command_recognized"}
-
-    broadcast_status_threadsafe(
-        "command_detected",
-        {"action": intent.action, "kind": intent.kind, "confidence": intent.confidence},
-    )
-
-    if intent.requires_confirmation and not request.confirm:
-        broadcast_status_threadsafe(
-            "command_needs_confirmation",
-            {"action": intent.action, "kind": intent.kind},
-        )
-        return {"ok": False, "reason": "needs_confirmation", "action": intent.action}
-
-    draft_id = request.draft_id
-    try:
-        if intent.action == "emergency_stop":
-            emergency_stop_runtime()
-            return {"ok": True, "action": intent.action}
-        if intent.action == "start_recording":
-            start_recording_runtime()
-            return {"ok": True, "action": intent.action}
-        if intent.action == "stop_recording":
-            stop_recording_runtime()
-            return {"ok": True, "action": intent.action}
-        if intent.action not in _DRAFT_DEPENDENT_ACTIONS:
-            return {"ok": False, "reason": "not_implemented", "action": intent.action}
-
-        if draft_id is None:
-            return {"ok": False, "reason": "no_draft", "action": intent.action}
-
-        if intent.action == "cancel":
-            result = await decline_draft(draft_id)
-        elif intent.action == "send":
-            result = send_draft_by_id(draft_id)
-        elif intent.action == "copy":
-            draft = get_draft_by_id(draft_id)
-            if draft is None:
-                return {"ok": False, "reason": "no_draft", "action": intent.action}
-            copy_text_to_clipboard(draft.get("final_text", ""))
-            result = {"draft_id": draft_id}
-        elif intent.action == "read_back":
-            draft = get_draft_by_id(draft_id)
-            if draft is None:
-                return {"ok": False, "reason": "no_draft", "action": intent.action}
-            speak_text_aloud(draft.get("final_text", ""))
-            result = {"draft_id": draft_id}
-        elif intent.action in _REWRITE_ACTION_FOR:
-            result = await rewrite_draft(draft_id, DraftRewriteRequest(action=_REWRITE_ACTION_FOR[intent.action]))
-        else:  # intent.action == "retry"
-            result = await retry_draft(draft_id)
-        return {"ok": True, "action": intent.action, "result": result}
-    except HTTPException:
-        raise
-    except Exception as exc:
-        logging.error(f"Voice command execution failed: {redact_exc(exc)}")
-        return {"ok": False, "reason": "error", "action": intent.action, "error": str(exc)}
-
-
-@app.post("/runtime/primary-action")
-async def runtime_primary_action():
-    return handle_primary_action()
-
-
-@app.post("/runtime/emergency-stop")
-async def runtime_emergency_stop():
-    return emergency_stop_runtime()
-
-
-@app.post("/runtime/recording/toggle")
-async def runtime_recording_toggle():
-    return toggle_recording_runtime()
-
-
-@app.post("/runtime/recording/start")
-async def runtime_recording_start():
-    return start_recording_runtime()
-
-
-@app.post("/runtime/recording/stop")
-async def runtime_recording_stop():
-    return stop_recording_runtime()
-
-
-@app.post("/runtime/tts/toggle")
-async def runtime_tts_toggle():
-    return handle_review_tts_shortcut()
-
-
-@app.post("/runtime/warmup")
-async def runtime_warmup(request: RuntimeWarmupRequest):
-    result: typing.Dict[str, typing.Any] = {"requested": request.model_dump()}
-
-    if request.stt:
-        trans = None
-        try:
-            trans = await run_in_threadpool(ensure_transcriber_initialized, preload=False)
-            probe_fn = getattr(trans, "runtime_probe", None) if trans is not None else None
-            if callable(probe_fn):
-                probe = await run_in_threadpool(probe_fn)
-                stt_status = _transcriber_status_snapshot(trans, probe)
-            else:
-                # Compatibility for test doubles/older injected transcribers:
-                # constructor success is the only fact available when there is
-                # no probe API, and is not called inference-ready by new code.
-                loaded = bool(trans and await run_in_threadpool(trans.ensure_loaded))
-                stt_status = _transcriber_status_snapshot(trans)
-                stt_status["constructed"] = loaded or stt_status.get("constructed", False)
-            result["stt"] = {
-                "ok": bool(stt_status.get("probe_passed", False)),
-                "initialized": trans is not None,
-                "loaded": bool(stt_status.get("constructed", False)),
-                **stt_status,
-            }
-        except Exception as e:
-            logging.error("Transcriber warmup failure (stt_inference_failed).")
-            _record_transcriber_runtime_event({
-                "code": "stt_inference_failed",
-                "state": "probe_failed",
-                "severity": "recoverable",
-            })
-            stt_status = _transcriber_status_snapshot(trans)
-            result["stt"] = {
-                "ok": False,
-                "initialized": transcriber is not None,
-                "loaded": bool(stt_status.get("constructed", False)),
-                **stt_status,
-                "error": stt_status.get("error_code") or "stt_inference_failed",
-            }
-
-    if request.llm:
-        try:
-            engine = get_selected_llm_engine()
-            ready = bool(getattr(engine, "_ready", False))
-            result["llm"] = {
-                "ok": ready,
-                "initialized": engine is not None,
-                "ready": ready,
-                "error": "" if ready else str(getattr(engine, "_last_error", "") or ""),
-            }
-        except Exception as e:
-            logging.exception("LLM warmup failure")
-            record_runtime_error("llm", str(e), {"action": "warmup"})
-            engine = get_engine_if_initialized()
-            result["llm"] = {
-                "ok": False,
-                "initialized": engine is not None,
-                "ready": bool(getattr(engine, "_ready", False)) if engine else False,
-                "error": str(e),
-            }
-
-    if request.hotkeys:
-        try:
-            manager = start_hotkey_manager()
-            hook_errors = list(getattr(manager, "keyboard_hook_errors", [])) if manager else []
-            if hook_errors:
-                message = "Keyboard hooks are unavailable: " + "; ".join(hook_errors)
-                record_runtime_error("hotkeys", message, {"action": "warmup", "degraded": True})
-            result["hotkeys"] = {
-                "ok": not hook_errors,
-                "started": manager is not None and hotkey_manager_started,
-                "keyboard_hooks_ok": not hook_errors,
-                "keyboard_hook_errors": hook_errors,
-                "error": "; ".join(hook_errors) if hook_errors else "",
-            }
-        except Exception as e:
-            logging.exception("Hotkey warmup failure")
-            record_runtime_error("hotkeys", str(e), {"action": "warmup"})
-            result["hotkeys"] = {
-                "ok": False,
-                "started": hotkey_manager_started,
-                "error": str(e),
-            }
-
-    # The warmup result contains stronger, action-specific evidence than the
-    # observation-only snapshot (notably the STT probe result). Merge it last
-    # so /runtime/warmup never overwrites that proof with a stale status row.
-    status_snapshot = get_runtime_status_snapshot()
-    status_snapshot.update(result)
-    return status_snapshot
-
-class LLMRequest(BaseModel):
-    text: str
-    preset: str = "True Janitor"
-    true_gen: bool = False
-
-@app.post("/llm/process", dependencies=[Depends(_require_dev_routes)])
-async def process_llm(request: LLMRequest):
-    try:
-        # Read lease: a concurrent LLM unload/reload/select waits or 409s
-        # rather than dropping the runtime mid-completion.
-        with model_runtime.read_lease("llm"):
-            engine = get_selected_llm_engine()
-            result = await run_in_threadpool(
-                engine.process_fast_lane,
-                request.text,
-                request.preset,
-                true_gen=request.true_gen,
-            )
-        return {"text": result}
-    except RuntimeBusyError:
-        raise HTTPException(status_code=409, detail="LLM runtime is being reconfigured; retry shortly.")
-    except Exception as e:
-        logging.error(f"LLM Process Error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/transcribe")
-async def transcribe_audio(file: UploadFile = File(...)):
-    global transcriber
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
-    temp_filename = tmp.name
-    tmp.close()
-    try:
-        # Validate the upload before anything else — a malformed or oversized
-        # file is rejected regardless of whether STT is loaded.
-        try:
-            upload_safety.stream_to_file(file.file, temp_filename, upload_safety.MAX_AUDIO_BYTES)
-            upload_safety.validate_signature(temp_filename, "audio")
-            upload_safety.validate_wav_duration(temp_filename)
-        except upload_safety.UploadTooLarge as exc:
-            raise HTTPException(status_code=413, detail=f"Audio too large (max {exc.limit} bytes).")
-        except upload_safety.UploadRejected as exc:
-            raise HTTPException(status_code=400, detail=f"Invalid audio: {exc}")
-        if not transcriber:
-            raise HTTPException(status_code=503, detail="Transcriber not initialized")
-        # Read lease: a concurrent STT unload/reload waits or 409s instead of
-        # freeing the Whisper model out from under this transcription.
-        with model_runtime.read_lease("stt"):
-            text = await run_in_threadpool(transcriber.transcribe, temp_filename)
-        return {"text": text}
-    except HTTPException:
-        raise
-    except RuntimeBusyError:
-        raise HTTPException(status_code=409, detail="STT runtime is being reconfigured; retry shortly.")
-    except Exception as e:
-        logging.error(f"Transcription Error: {redact_exc(e)}")
-        raise HTTPException(status_code=500, detail="Transcription failed")
-    finally:
-        try:
-            os.remove(temp_filename)
-        except OSError:
-            pass
-
-class TTSRequest(BaseModel):
-    text: str
-    voice_id: Optional[str] = None
-    speed: Optional[float] = None
-    pitch: Optional[float] = None
-    blend: Optional[dict] = None
-    energy: Optional[float] = None
-    warmth: Optional[float] = None
-    brightness: Optional[float] = None
-    pause_style: Optional[str] = None
-    preset_name: Optional[str] = None
-    persona: Optional[str] = None
-
-@app.post("/tts/speak")
-async def tts_speak(request: TTSRequest):
-    wiping = _reject_if_wiping("TTS")
-    if wiping:
-        return {"status": "error", **wiping}
-    text = (request.text or "").strip()
-    if not text:
-        return {"ok": False, "status": "error", "message": "No text to speak.", "error": "empty_text"}
-
-    profile_name = get_last_active_profile()
-    try:
-        config = load_profile(profile_name)
-    except Exception:
-        config = {}
-
-    voice_id, speed, blend, modulation = _resolve_voice_and_modulation(request, config)
-    logging.info(f"TTS Request: {redact_user_text(text)} | Voice: {voice_id} | Speed: {speed}x")
-
-    engine = await run_in_threadpool(ensure_tts_initialized)
-    if engine is None:
-        message = "TTS engine is not available."
-        record_runtime_error("tts", message, {"action": "tts_speak"})
-        return {"ok": False, "status": "error", "message": message, "error": "tts_unavailable"}
-
-    try:
-        with model_runtime.read_lease("tts"):
-            result = await run_in_threadpool(
-                engine.speak, text, speed=speed, voice_hint=voice_id, blend=blend, modulation=modulation
-            )
-    except RuntimeBusyError:
-        return {"ok": False, "status": "error", "error": "tts_reconfiguring",
-                "message": "TTS runtime is being reconfigured; retry shortly."}
-    result["status"] = "success" if result.get("ok") else "error"
-    return result
-
-@app.post("/tts/stop")
-async def stop_tts_route():
-    global tts_engine
-    if tts_engine is not None:
-        try:
-            tts_engine.stop_current()
-            broadcast_status_threadsafe("draft_tts_stopped", {"message": "TTS stopped manually."})
-            return {"ok": True, "message": "TTS playback stopped."}
-        except Exception as e:
-            return {"ok": False, "message": f"Failed to stop TTS: {e}"}
-    return {"ok": True, "message": "TTS engine not active."}
-
-@app.get("/runtime/tts-status")
-async def get_tts_status():
-    global tts_engine
-    engine = await run_in_threadpool(ensure_tts_initialized)
-    
-    import platform
-    is_linux = (platform.system().lower() == "linux")
-    libsndfile_missing = False
-    libsndfile_error = ""
-    
-    try:
-        import sounddevice as sd
-    except Exception as e:
-        if is_linux and ("sndfile" in str(e).lower() or "libsndfile" in str(e).lower() or "not found" in str(e).lower() or "cannot open shared object file" in str(e).lower()):
-            libsndfile_missing = True
-        libsndfile_error = str(e)
-        
-    if engine is None:
-        msg = f"Failed to instantiate TTS engine: {libsndfile_error}" if libsndfile_error else "TTS engine is not available."
-        if libsndfile_missing:
-            msg = f"Linux system package dependency failure: libsndfile1 is missing ({libsndfile_error}). Run 'sudo apt-get install libsndfile1' to resolve."
-        return {
-            "ok": False,
-            "backend": "unavailable",
-            "fallback": False,
-            "message": msg,
-            "libsndfile_missing": libsndfile_missing,
-            "libsndfile_error": libsndfile_error
-        }
-
-    status = await run_in_threadpool(engine.ensure_loaded)
-    backend_val = engine.backend()
-
-    backend_name = "unavailable"
-    if backend_val == "kokoro":
-        backend_name = "Kokoro"
-    elif backend_val == "kokoro_onnx":
-        backend_name = "ONNX"
-    elif backend_val == "sapi":
-        backend_name = "SAPI fallback"
-
-    msg = engine._status_message
-    if libsndfile_missing:
-        msg = f"Linux system package dependency failure: libsndfile1 is missing ({libsndfile_error}). Run 'sudo apt-get install libsndfile1' to resolve."
-        backend_name = "unavailable"
-
-    # get_capabilities() is a newer, optional addition to ReviewTTSEngine
-    # (backend/runtime/blend_capable snapshot for the UI to gate blend
-    # controls on). Guard with getattr rather than assuming it exists so
-    # this route works the same whether or not that method has landed yet.
-    capabilities = None
-    get_capabilities = getattr(engine, "get_capabilities", None)
-    if callable(get_capabilities):
-        capabilities = get_capabilities()
-
-    return {
-        "ok": engine.is_loaded() and not libsndfile_missing,
-        "backend": backend_name,
-        "raw_backend": backend_val,
-        "fallback": engine._fallback,
-        "message": msg,
-        "libsndfile_missing": libsndfile_missing,
-        "libsndfile_error": libsndfile_error if libsndfile_missing else None,
-        "capabilities": capabilities,
-    }
-
-@app.post("/tts/clone")
-async def tts_clone(file: UploadFile = File(...), name: str = Form("My Voice"), consent: bool = Form(...)):
-    """Save an uploaded sample as a clone source, gated on explicit consent
-    and basic quality checks (voice_clone_qa). This does NOT perform actual
-    voice-cloning synthesis — no cloning engine is installed (see
-    DESIGN.md §10 M5 cloning / its kokoclone note); it only gates
-    and tags what gets saved, so a real engine can be wired in later without
-    revisiting this validation/consent layer.
-    """
-    import json
-
-    if not consent:
-        raise HTTPException(
-            status_code=400,
-            detail="Voice cloning requires explicit consent that you own this voice or have permission to clone it.",
-        )
-
-    safe_name = "".join([c for c in name if c.isalnum() or c in (' ', '_', '-')]).strip().replace(" ", "_")
-    if not safe_name:
-        raise HTTPException(status_code=400, detail="A voice name is required.")
-
-    voices_dir = ensure_voices_dir()
-    target_path = voices_dir / f"cloned_{safe_name}.wav"
-    tmp_path = None
-    try:
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
-        tmp_path = tmp.name
-        tmp.close()
-        # Bounded, signature-checked, duration-limited upload.
-        try:
-            upload_safety.stream_to_file(file.file, tmp_path, upload_safety.MAX_AUDIO_BYTES)
-            upload_safety.validate_signature(tmp_path, "audio")
-            upload_safety.validate_wav_duration(tmp_path)
-        except upload_safety.UploadTooLarge as exc:
-            raise HTTPException(status_code=413, detail=f"Voice sample too large (max {exc.limit} bytes).")
-        except upload_safety.UploadRejected as exc:
-            raise HTTPException(status_code=400, detail=f"Invalid voice sample: {exc}")
-
-        ok, warnings = voice_clone_qa.check_file(tmp_path)
-        if not ok:
-            raise HTTPException(
-                status_code=400,
-                detail={"message": "Sample failed quality checks.", "warnings": warnings},
-            )
-
-        shutil.move(tmp_path, target_path)
-        tmp_path = None
-
-        meta = {
-            "cloned_voice": True,
-            "consent": True,
-            "qa": {"warnings": warnings},
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        }
-        meta_path = voices_dir / f"cloned_{safe_name}.meta.json"
-        with open(meta_path, "w", encoding="utf-8") as handle:
-            json.dump(meta, handle, indent=2)
-
-        logging.info(f"Voice cloned: {safe_name} saved to {target_path}")
-        return {"status": "success", "voice_id": f"cloned_{safe_name}", "path": str(target_path), "warnings": warnings}
-    except HTTPException:
-        raise
-    except Exception as e:
-        logging.error(f"Cloning failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        if tmp_path and os.path.exists(tmp_path):
-            try:
-                os.remove(tmp_path)
-            except OSError:
-                pass
-
-@app.get("/tts/voices")
-async def list_voices():
-    import json
-
-    voices_dir = get_voices_path()
-
-    cloned = []
-    if os.path.exists(voices_dir):
-        for f in os.listdir(voices_dir):
-            if f.endswith(".wav") or f.endswith(".npy"):
-                voice_id = f.split('.')[0]
-                entry = {"id": voice_id, "name": voice_id.replace("cloned_", "").replace("_", " ")}
-                meta_path = os.path.join(voices_dir, f"{voice_id}.meta.json")
-                if os.path.exists(meta_path):
-                    try:
-                        with open(meta_path, "r", encoding="utf-8") as handle:
-                            entry["meta"] = json.load(handle)
-                    except (OSError, ValueError):
-                        pass
-                cloned.append(entry)
-
-    defaults = [
-        {"id": "af_heart", "name": "Kokoro Heart"},
-        {"id": "af_bella", "name": "Kokoro Bella"},
-        {"id": "af_nicole", "name": "Kokoro Nicole"},
-        {"id": "af_sarah", "name": "Kokoro Sarah"},
-        {"id": "am_puck", "name": "Kokoro Puck"},
-        {"id": "am_michael", "name": "Kokoro Michael"},
-        {"id": "bf_emma", "name": "Kokoro Emma"},
-        {"id": "bm_george", "name": "Kokoro George"},
-        {"id": "standard_female", "name": "Standard Female (Kokoro Heart)"},
-        {"id": "standard_male", "name": "Standard Male (Kokoro Puck)"},
-    ]
-    
-    import voice_clone_engine
-    return {"defaults": defaults, "cloned": cloned,
-            "cloning": voice_clone_engine.availability()}
-
-
-@app.get("/tts/clone/status")
-async def get_voice_clone_status():
-    """Cloning-runtime status for the models/settings UI: whether cloned-voice
-    synthesis can run right now, why not if it can't, and whether the optional
-    side-runtime has already been provisioned. availability() does real
-    imports (torch/kanade_tokenizer) as its check, so — like every other
-    availability-probing route here — it runs in a threadpool rather than
-    blocking the event loop.
-    """
-    import voice_clone_engine
-    status = await run_in_threadpool(voice_clone_engine.availability)
-    return {
-        "ok": True,
-        "available": status["available"],
-        "reason": status["reason"],
-        "setup_hint": status["setup_hint"],
-        "mechanism": status["mechanism"],
-        "provisioned": voice_clone_engine.is_clone_runtime_provisioned(),
-    }
-
-
-@app.post("/tts/clone/provision")
-async def provision_voice_cloning():
-    """Provision the optional voice-cloning runtime on demand (models-page
-    "Install voice cloning" card). Replaces the old "run tools/setup_voice_
-    cloning.py" CLI hint — that path can't work inside a packaged app. Runs the
-    download-verify-extract in a threadpool (it's I/O + subprocess-bound) and
-    always returns the fresh availability() so the card re-renders truthfully.
-    provision_clone_runtime() refuses cleanly (ok=False + message) when the
-    platform has no catalog entry or the artifact isn't published yet, so this
-    route never raises for the not-ready case."""
-    import voice_clone_engine
-    result = await run_in_threadpool(voice_clone_engine.provision_clone_runtime)
-    return {**result, "cloning": voice_clone_engine.availability()}
-
-
-@app.delete("/tts/voices/{voice_id}")
-async def delete_cloned_voice(voice_id: str):
-    """Immediately delete a cloned voice (sample + provenance metadata).
-
-    Required by the cloning consent/abuse controls (DESIGN §10 M5 U6): a user
-    must be able to remove a cloned voice without a full privacy wipe. Only the
-    cloned_* namespace is deletable — built-in voices are not files on disk.
-    """
-    safe = os.path.basename(str(voice_id or "").strip())
-    if not safe.startswith("cloned_") or safe != voice_id.strip():
-        raise HTTPException(status_code=400, detail="Only cloned voices (cloned_*) can be deleted.")
-    voices_dir = get_voices_path()
-    removed = []
-    for suffix in (".wav", ".npy", ".meta.json"):
-        path = os.path.join(str(voices_dir), f"{safe}{suffix}")
-        try:
-            if os.path.exists(path):
-                os.remove(path)
-                removed.append(os.path.basename(path))
-        except OSError as exc:
-            raise HTTPException(status_code=500, detail=f"Could not delete {os.path.basename(path)}: {exc}")
-    if not removed:
-        raise HTTPException(status_code=404, detail=f"Cloned voice '{safe}' not found.")
-    logging.info(f"Deleted cloned voice {safe}: {removed}")
-    return {"ok": True, "voice_id": safe, "removed": removed}
-
-
-@app.post("/ocr/extract")
-async def ocr_extract(file: UploadFile = File(...)):
-    # Validate the upload before touching optional OCR dependencies — a
-    # malformed/oversized image is rejected even if Tesseract isn't installed.
-    # The temp file is always cleaned up in the outer finally.
-    tmp_ocr = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
-    temp_filename = tmp_ocr.name
-    tmp_ocr.close()
-    try:
-        try:
-            upload_safety.stream_to_file(file.file, temp_filename, upload_safety.MAX_IMAGE_BYTES)
-            upload_safety.validate_signature(temp_filename, "image")
-            upload_safety.validate_image(temp_filename)
-        except upload_safety.UploadTooLarge as exc:
-            raise HTTPException(status_code=413, detail=f"Image too large (max {exc.limit} bytes).")
-        except upload_safety.UploadRejected as exc:
-            raise HTTPException(status_code=400, detail=f"Invalid image: {exc}")
-
-        try:
-            import pytesseract
-            from PIL import Image
-        except ImportError:
-            return {"text": "[Error: pytesseract library not installed on backend.]"}
-        try:
-            text = pytesseract.image_to_string(Image.open(temp_filename))
-            return {"text": text.strip()}
-        except Exception as e:
-            logging.error(f"Tesseract Error: {e}")
-            return {"text": "[Error: Tesseract not found or failed. Please ensure Tesseract-OCR is installed.]"}
-    except HTTPException:
-        raise
-    except Exception as e:
-        logging.error(f"OCR Endpoint Error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        try:
-            os.remove(temp_filename)
-        except OSError:
-            pass
-
-class GraphRequest(BaseModel):
-    nodes: list
-    edges: list
-
-@app.post("/graph/save", dependencies=[Depends(_require_dev_routes)])
-async def save_graph(data: GraphRequest):
-    graph_path = get_graph_path()
-    try:
-        graph_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(graph_path, "w") as f:
-            import json
-            json.dump(data.model_dump(), f)
-        return {"status": "success"}
-    except Exception as e:
-        logging.error(f"Graph Save Error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/graph/load", dependencies=[Depends(_require_dev_routes)])
-async def load_graph():
-    graph_path = get_graph_path()
-    if os.path.exists(graph_path):
-        try:
-            with open(graph_path, "r") as f:
-                import json
-                return json.load(f)
-        except Exception as e:
-             logging.error(f"Graph Load Error: {e}")
-             return {"nodes": [], "edges": []}
-    return {"nodes": [], "edges": []}
-
-class PlanRequest(BaseModel):
-    goal: str
-
-@app.post("/llm/generate_plan", dependencies=[Depends(_require_dev_routes)])
-async def generate_plan(request: PlanRequest):
-    engine = get_selected_llm_engine()
-    prompt = f"Goal: {request.goal}"
-
-    # Generate text
-    json_text = await run_in_threadpool(
-        engine.process_fast_lane, prompt, preset_name="Plan Generator", true_gen=False, context_rules=False
-    )
-    
-    # Attempt to clean potential markdown code blocks if the LLM ignores instructions
-    clean_text = json_text.strip()
-    if clean_text.startswith("```json"):
-        clean_text = clean_text[7:]
-    if clean_text.startswith("```"):
-        clean_text = clean_text[3:]
-    if clean_text.endswith("```"):
-        clean_text = clean_text[:-3]
-    
-    import json
-    try:
-        plan = json.loads(clean_text.strip())
-        return plan
-    except json.JSONDecodeError:
-        # Do not log model output verbatim — it can contain the user's prompt
-        # content. Length + error class is enough to diagnose.
-        logging.error(f"LLM produced invalid JSON ({len(clean_text)} chars).")
-        return {"title": "Generation Failed", "phases": [{"name": "Error", "tasks": ["The LLM did not return valid JSON.", "Please try again."]}]}
-    except Exception as e:
-        logging.error(f"Plan Gen Error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+# TTS routes (/tts/speak, /tts/stop, /runtime/tts/toggle, /runtime/tts-status,
+# /tts/voices*, /tts/clone*) are their own slice in backend/api/routes/tts.py (R7);
+# registered via app.include_router at the end of this file. ensure_tts_initialized
+# (the `global tts_engine` rebinding), _reject_if_wiping,
+# _resolve_voice_and_modulation, handle_review_tts_shortcut and the voices-dir
+# helpers stay here and are read by the router as s.<name>.
 
 def _get_downloads_dir():
     """Return the user's Downloads directory, cross-platform.
@@ -6205,97 +4635,28 @@ def _get_downloads_dir():
     return home
 
 
-class ExportRequest(BaseModel):
-    title: str
-    content: str
-    plan: dict
-
-@app.post("/project/export", dependencies=[Depends(_require_dev_routes)])
-async def export_project(request: ExportRequest):
-    import zipfile
-    import io
-    from fastapi.responses import StreamingResponse
-    
-    try:
-        # Create ZIP in memory
-        zip_buffer = io.BytesIO()
-        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
-            # Add README
-            zip_file.writestr("README.md", f"# {request.title}\n\nExported from BetterFingers.")
-            
-            # Add Content
-            zip_file.writestr("document.md", request.content)
-            
-            # Add Plan
-            import json
-            zip_file.writestr("plan.json", json.dumps(request.plan, indent=2))
-            
-        zip_buffer.seek(0)
-
-        # Save under the user's Downloads dir (cross-platform), falling back to
-        # the home directory if Downloads doesn't exist.
-        export_dir = _get_downloads_dir()
-        safe_title = re.sub(r"[^\w\-]", "_", request.title)[:60] or "export"
-        export_path = os.path.join(export_dir, f"{safe_title}_Export.zip")
-        with open(export_path, "wb") as f:
-            f.write(zip_buffer.getvalue())
-
-        return {"status": "success", "path": export_path}
-
-    except Exception as e:
-        logging.error(f"Export Error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/profile")
-async def get_profile():
-    return profile_manager.get_profile()
-
-@app.post("/profile")
-async def save_profile(data: dict):
-    success = profile_manager.save_profile(data)
-    return {"status": "success" if success else "error"}
-
-@app.get("/intent/state", dependencies=[Depends(_require_dev_routes)])
-async def get_intent_state():
-    return {"state": intent_engine.get_state()}
-
-@app.post("/intent/state", dependencies=[Depends(_require_dev_routes)])
-async def set_intent_state(data: dict):
-    # expect {"state": "planning"}
-    new_state = data.get("state")
-    if new_state == "planning":
-        intent_engine.set_state(IntentState.PLANNING)
-    elif new_state == "executing":
-        intent_engine.set_state(IntentState.EXECUTING)
-    elif new_state == "idle":
-        intent_engine.set_state(IntentState.IDLE)
-    return {"state": intent_engine.get_state()}
-
-@app.post("/project/generate", dependencies=[Depends(_require_dev_routes)])
-async def generate_project(data: dict):
-    # expect {"plan": {...}, "path": "..."}
-    plan = data.get("plan")
-    path = data.get("path")
-    if not plan or not path:
-        raise HTTPException(status_code=400, detail="Missing plan or path")
-    
-    success, msg = await run_in_threadpool(project_generator.generate_project, plan, path)
-    return {"status": "success" if success else "error", "message": msg}
-
-
 # --- Extracted route modules (M6). Registered after every server-level name is
 # defined, so the routers' `import server` resolves fully. _foundry_sessions is
 # re-bound so server._foundry_sessions stays the shared store existing tests use.
-import routes_foundry  # noqa: E402
-import routes_user_config  # noqa: E402
-import routes_models_resources  # noqa: E402
-import routes_wake  # noqa: E402
+from backend.api.routes import foundry as routes_foundry  # noqa: E402
+from backend.api.routes import user_config as routes_user_config  # noqa: E402
+from backend.api.routes import models_resources as routes_models_resources  # noqa: E402
+from backend.api.routes import wake as routes_wake  # noqa: E402
 from backend.api.routes import personas as routes_personas  # noqa: E402
 from backend.api.routes import message_rescue as routes_message_rescue  # noqa: E402
 from backend.api.routes import contacts as routes_contacts  # noqa: E402
 from backend.api.routes import library as routes_library  # noqa: E402
 from backend.api.routes import app_context as routes_app_context  # noqa: E402
 from backend.api.routes import actions as routes_actions  # noqa: E402
+from backend.api.routes import dev as routes_dev  # noqa: E402
+from backend.api.routes import settings as routes_settings  # noqa: E402
+from backend.api.routes import history as routes_history  # noqa: E402
+from backend.api.routes import diagnostics as routes_diagnostics  # noqa: E402
+from backend.api.routes import models as routes_models  # noqa: E402
+from backend.api.routes import tts as routes_tts  # noqa: E402
+from backend.api.routes import drafts as routes_drafts  # noqa: E402
+from backend.api.routes import privacy as routes_privacy  # noqa: E402
+from backend.api.routes import runtime as routes_runtime  # noqa: E402
 
 app.include_router(routes_foundry.router)
 app.include_router(routes_user_config.router)
@@ -6307,6 +4668,21 @@ app.include_router(routes_contacts.router)
 app.include_router(routes_library.router)
 app.include_router(routes_app_context.router)
 app.include_router(routes_actions.router)
+app.include_router(routes_dev.router)
+app.include_router(routes_settings.router)
+app.include_router(routes_history.router)
+app.include_router(routes_diagnostics.router)
+app.include_router(routes_models.router)
+app.include_router(routes_tts.router)
+app.include_router(routes_drafts.router)
+app.include_router(routes_privacy.router)
+app.include_router(routes_runtime.router)
+# The voice-status WebSocket handler lives in runtime.py but is attached to the app
+# here, not through the router: a WebSocket route that arrives via include_router is
+# reported with path '' by FastAPI 0.140.x's iter_route_contexts, which would change
+# the route table tests/test_route_table_snapshot.py pins. add_api_websocket_route is
+# exactly what the former @app.websocket decorator called.
+app.add_api_websocket_route("/ws/voice_status", routes_runtime.websocket_endpoint)
 from backend.api.routes import input_devices as input_devices_routes  # noqa: E402
 app.include_router(input_devices_routes.router)
 _foundry_sessions = routes_foundry._foundry_sessions
@@ -6441,16 +4817,16 @@ if __name__ == "__main__":
     # Fail-closed auth (§5): never serve an open API by accident.
     _security = validate_startup_security(
         args.host,
-        os.getenv("BETTERFINGERS_AUTH_TOKEN"),
+        get_auth_token(),
         allow_remote=os.getenv("BETTERFINGERS_ALLOW_REMOTE") == "1",
     )
     if not _security["ok"]:
         logging.error(_security["error"])
         raise SystemExit(_security["error"])
     if _security["generated"]:
-        os.environ["BETTERFINGERS_AUTH_TOKEN"] = _security["token"]
-        # Printed once so a standalone developer can authenticate; the token
-        # is ephemeral to this process.
-        print(f"[betterfingers] No auth token supplied; generated one for this run:\n"
-              f"[betterfingers]   BETTERFINGERS_AUTH_TOKEN={_security['token']}")
+        set_runtime_token(_security["token"])
+        # The token is NEVER printed (terminal scrollback, supervisors and
+        # support bundles keep stdout); a developer who needs it sets
+        # BETTERFINGERS_TOKEN_FILE and reads it from there.
+        announce_generated_token(_security["token"])
     uvicorn.run(app, host=args.host, port=args.port)

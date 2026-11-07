@@ -14,7 +14,7 @@ raw text. Falling back to raw is never worse than raw; emitting empty is data lo
 import unittest
 from unittest.mock import Mock, patch
 
-from llm_engine import LLMEngine
+from backend.llm.llm_engine import LLMEngine
 
 
 class CallApiEmptyOutputGuardTests(unittest.TestCase):
@@ -29,28 +29,28 @@ class CallApiEmptyOutputGuardTests(unittest.TestCase):
         fake_response.json.return_value = {"choices": [{"message": {"content": content}}]}
         return fake_response
 
-    @patch("llm_engine.requests.post")
+    @patch("backend.llm.llm_engine.requests.post")
     def test_empty_completion_falls_back_to_raw(self, post_mock):
         post_mock.return_value = self._post_returning("")
         engine = self._engine()
         raw = "i wanted to talk about the timeline"
         self.assertEqual(engine._call_api(raw, "prompt"), raw)
 
-    @patch("llm_engine.requests.post")
+    @patch("backend.llm.llm_engine.requests.post")
     def test_whitespace_only_completion_falls_back_to_raw(self, post_mock):
         post_mock.return_value = self._post_returning("   \n\t ")
         engine = self._engine()
         raw = "some real words here"
         self.assertEqual(engine._call_api(raw, "prompt"), raw)
 
-    @patch("llm_engine.requests.post")
+    @patch("backend.llm.llm_engine.requests.post")
     def test_normal_completion_passes_through(self, post_mock):
         post_mock.return_value = self._post_returning("  cleaned text.  ")
         engine = self._engine()
         # Real cleanup still wins and is stripped.
         self.assertEqual(engine._call_api("raw words", "prompt"), "cleaned text.")
 
-    @patch("llm_engine.requests.post")
+    @patch("backend.llm.llm_engine.requests.post")
     def test_empty_input_with_empty_completion_stays_empty(self, post_mock):
         # No dictation to protect: an empty result for empty input is fine and must
         # NOT be replaced by the (also empty) input in a way that masks the guard.
@@ -58,7 +58,7 @@ class CallApiEmptyOutputGuardTests(unittest.TestCase):
         engine = self._engine()
         self.assertEqual(engine._call_api("   ", "prompt"), "")
 
-    @patch("llm_engine.requests.post")
+    @patch("backend.llm.llm_engine.requests.post")
     def test_transport_error_still_returns_raw(self, post_mock):
         # The pre-existing failure path must keep returning raw, not crash.
         post_mock.side_effect = RuntimeError("connection refused")

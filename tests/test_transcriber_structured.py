@@ -8,7 +8,7 @@ from unittest.mock import patch
 import numpy as np
 
 from backend.domain.contracts import TimedSegment, TranscriptionResult, to_dict
-from transcriber import Transcriber
+from backend.stt.transcriber import Transcriber
 
 
 class _DummySegment:
@@ -35,8 +35,9 @@ def _make_transcriber(segments):
     # construction: preload=False means the model isn't actually built until
     # the first transcribe() call, which happens after this helper would
     # otherwise have already returned and torn the patch down.
-    with patch("transcriber.load_profile", return_value={"model_size": "base.en", "use_gpu": False}), \
-         patch("transcriber.WhisperModel", return_value=_DummyWhisperModel(segments)):
+    with patch("backend.stt.transcriber.load_profile", return_value={"model_size": "base.en", "use_gpu": False}), \
+         patch.object(Transcriber, "_is_model_cached", return_value=True), \
+         patch("backend.stt.transcriber.WhisperModel", return_value=_DummyWhisperModel(segments)):
         yield Transcriber(profile_name="Default", preload=False)
 
 

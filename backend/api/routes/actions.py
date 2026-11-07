@@ -42,8 +42,10 @@ from typing import List, Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from backend.api.models import ApprovalTicketModel
 from backend.domain.actions import (
     ALLOWED_ACTIONS,
+    OUTWARD_ACTIONS,
     PROHIBITED_ACTIONS,
     SCHEMA_VERSION,
     compile_workflow,
@@ -55,7 +57,8 @@ from backend.services.action_validator import (
     summarize_run,
     validate_workflow,
 )
-from backend.services.workflow_store import WorkflowStore
+from backend.services import approvals
+from backend.services.workflow_store import WorkflowStore, preview_too_large
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -64,12 +67,17 @@ _ERROR_STATUS = {
     "invalid_id": 400,
     "invalid_summary": 400,
     "empty_preview": 400,
+    "preview_too_large": 400,
     "refused": 400,
     "not_found": 404,
     "cap_reached": 409,
     "disabled": 409,
     "not_approved": 409,
     "preview_changed": 409,
+    "workflow_changed": 409,
+    "approval_required": 403,
+    "approval_invalid": 403,
+    "approval_unavailable": 503,
     "write_failed": 500,
 }
 
@@ -119,6 +127,15 @@ class SaveRequest(BaseModel):
 class ApproveRequest(BaseModel):
     workflow_id: str
     preview: List[str] = Field(default_factory=list)
+    # A signed ticket minted by the Electron main process after a native dialog
+    # showed the person this exact, complete preview (Phase 0 item 1). Without it
+    # nothing is approved, whoever holds the bearer token.
+    approval: Optional[ApprovalTicketModel] = None
+
+
+class PreviewRequest(BaseModel):
+    workflow_id: str
+    context: ValidationContext = Field(default_factory=ValidationContext)
 
 
 class EnableRequest(BaseModel):
@@ -207,9 +224,60 @@ async def save_workflow_route(request: SaveRequest):
     return result
 
 
+@router.post("/workflows/preview")
+async def preview_workflow_route(request: PreviewRequest):
+    """The exact preview the run gate would compare against, for a saved workflow.
+
+    Read-only. The Electron main process calls this to learn what to put in the
+    native approval dialog, and signs digests of what it returns; the digests are
+    returned here so main never has to canonicalise anything itself.
+    """
+    record = _store().get(request.workflow_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="That workflow no longer exists.")
+    validation = _validate(record, request.context)
+    lines = preview_lines(validation.preview)
+    return {
+        "ok": bool(validation.ok),
+        "workflow_id": record["id"],
+        "name": record.get("name", ""),
+        "preview_lines": lines,
+        "preview_sha256": approvals.preview_digest(lines),
+        "steps_sha256": approvals.steps_digest(record["steps"]),
+        "refusals": [r.to_dict() for r in validation.refusals],
+        # Round 2, item 5: does a run have an outward effect, and would the gate let it run now?
+        "outward": any(step.get("action") in OUTWARD_ACTIONS for step in record["steps"]),
+        "runnable": bool(validation.ok and _store().can_run(record["id"], lines).get("ok")),
+    }
+
+
 @router.post("/workflows/approve")
 async def approve_workflow_route(request: ApproveRequest):
-    result = _store().approve(request.workflow_id, request.preview)
+    """Approve a workflow's exact preview. Needs a signed ticket from main.
+
+    The ticket binds the workflow id, the digest of the complete preview the
+    person read and the digest of the workflow's steps; it is verified against
+    this backend's own copy of the workflow before anything is written.
+    """
+    store = _store()
+    record = store.get(request.workflow_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="That workflow no longer exists.")
+    lines = list(request.preview)
+    if not lines:
+        raise HTTPException(status_code=400, detail="There is nothing to approve — the preview is empty.")
+    if preview_too_large(lines):
+        raise HTTPException(status_code=400, detail="That preview is too long to approve safely. Simplify the workflow.")
+    try:
+        proof = approvals.verify(
+            request.approval.model_dump() if request.approval else None,
+            purpose=approvals.PURPOSE_WORKFLOW_APPROVE,
+            subject=record["id"],
+            bind=approvals.workflow_bind(lines, record["steps"]),
+        )
+    except approvals.ApprovalError as exc:
+        raise HTTPException(status_code=approvals.http_status_for(exc.code), detail=exc.message)
+    result = store.approve(record["id"], lines, proof)
     if not result.get("ok"):
         _fail(result)
     return result

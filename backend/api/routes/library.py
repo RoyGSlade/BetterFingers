@@ -22,8 +22,8 @@ from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 from typing import Optional
 
-import history_store
-import recordings
+from backend.stores import history_store
+from backend.stores import recordings
 from backend.services.library import LibraryService
 
 router = APIRouter()

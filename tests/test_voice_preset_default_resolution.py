@@ -19,6 +19,7 @@ import unittest
 from unittest.mock import patch
 
 import server
+from backend.api.routes import tts as routes_tts
 
 
 def _preset(name, **overrides):
@@ -51,11 +52,11 @@ class ResolveVoiceDefaultPresetLayerTests(unittest.TestCase):
         # brightness/pause_style/preset_name/persona), all defaulting to
         # None -- using the real request model instead of a hand-rolled
         # double keeps this honest against either call site.
-        return server.TTSRequest(text="hello", **kwargs)
+        return routes_tts.TTSRequest(text="hello", **kwargs)
 
     def test_no_default_falls_through_to_profile_config(self):
-        with patch("voice_presets.get_presets", return_value=[]), patch(
-            "voice_presets.get_default_preset", return_value=None
+        with patch("backend.stores.voice_presets.get_presets", return_value=[]), patch(
+            "backend.stores.voice_presets.get_default_preset", return_value=None
         ):
             voice_id, speed, blend, modulation = server._resolve_voice_and_modulation(
                 self._req(), {"review_tts_voice_hint": "am_puck", "review_tts_speed": 1.3}
@@ -65,8 +66,8 @@ class ResolveVoiceDefaultPresetLayerTests(unittest.TestCase):
 
     def test_default_preset_beats_profile_config(self):
         default_preset = _preset("Warm Assistant", base="af_bella", speed=1.1, pitch=2.0)
-        with patch("voice_presets.get_presets", return_value=[default_preset]), patch(
-            "voice_presets.get_default_preset", return_value="Warm Assistant"
+        with patch("backend.stores.voice_presets.get_presets", return_value=[default_preset]), patch(
+            "backend.stores.voice_presets.get_default_preset", return_value="Warm Assistant"
         ):
             voice_id, speed, blend, modulation = server._resolve_voice_and_modulation(
                 self._req(), {"review_tts_voice_hint": "am_puck", "review_tts_speed": 1.3}
@@ -79,8 +80,8 @@ class ResolveVoiceDefaultPresetLayerTests(unittest.TestCase):
 
     def test_explicit_request_field_beats_default_preset(self):
         default_preset = _preset("Warm Assistant", base="af_bella", speed=1.1)
-        with patch("voice_presets.get_presets", return_value=[default_preset]), patch(
-            "voice_presets.get_default_preset", return_value="Warm Assistant"
+        with patch("backend.stores.voice_presets.get_presets", return_value=[default_preset]), patch(
+            "backend.stores.voice_presets.get_default_preset", return_value="Warm Assistant"
         ):
             voice_id, speed, blend, modulation = server._resolve_voice_and_modulation(
                 self._req(voice_id="am_michael", speed=0.8), {}
@@ -92,14 +93,14 @@ class ResolveVoiceDefaultPresetLayerTests(unittest.TestCase):
         default_preset = _preset("Warm Assistant", base="af_bella")
         requested_preset = _preset("Crisp Editor", base="am_puck")
         with patch(
-            "voice_presets.get_presets", return_value=[default_preset, requested_preset]
-        ), patch("voice_presets.get_default_preset", return_value="Warm Assistant"):
+            "backend.stores.voice_presets.get_presets", return_value=[default_preset, requested_preset]
+        ), patch("backend.stores.voice_presets.get_default_preset", return_value="Warm Assistant"):
             voice_id, speed, blend, modulation = server._resolve_voice_and_modulation(
                 self._req(preset_name="Crisp Editor"), {}
             )
         self.assertEqual(voice_id, server.normalize_tts_voice_id("am_puck"))
 
-    @patch("llm_engine.get_persona")
+    @patch("backend.llm.llm_engine.get_persona")
     def test_persona_with_voice_identity_beats_default_preset(self, mock_get_persona):
         mock_get_persona.return_value = {
             "voice": {"base": "bf_emma", "preset": "", "speed": 1.0, "pitch": 0.0,
@@ -107,8 +108,8 @@ class ResolveVoiceDefaultPresetLayerTests(unittest.TestCase):
                       "pause_style": "natural", "stability": 0.5, "blend": {}},
         }
         default_preset = _preset("Warm Assistant", base="af_bella")
-        with patch("voice_presets.get_presets", return_value=[default_preset]), patch(
-            "voice_presets.get_default_preset", return_value="Warm Assistant"
+        with patch("backend.stores.voice_presets.get_presets", return_value=[default_preset]), patch(
+            "backend.stores.voice_presets.get_default_preset", return_value="Warm Assistant"
         ):
             voice_id, speed, blend, modulation = server._resolve_voice_and_modulation(
                 self._req(persona="Court Reporter"), {}
@@ -123,8 +124,8 @@ class ResolveVoiceDefaultPresetLayerTests(unittest.TestCase):
             "Warm Assistant", base="af_bella", blend={"am_adam": 0.3},
             warmth=0.4, brightness=0.2, pause_style="relaxed",
         )
-        with patch("voice_presets.get_presets", return_value=[default_preset]), patch(
-            "voice_presets.get_default_preset", return_value="Warm Assistant"
+        with patch("backend.stores.voice_presets.get_presets", return_value=[default_preset]), patch(
+            "backend.stores.voice_presets.get_default_preset", return_value="Warm Assistant"
         ):
             voice_id, speed, blend, modulation = server._resolve_voice_and_modulation(
                 self._req(), {}
@@ -141,8 +142,8 @@ class ResolveVoiceDefaultPresetLayerTests(unittest.TestCase):
         # get_presets() read -- if that lookup ever comes back empty
         # (e.g. a race with a delete), it must fall through cleanly rather
         # than raising or crashing on a None preset.
-        with patch("voice_presets.get_presets", return_value=[]), patch(
-            "voice_presets.get_default_preset", return_value="Ghost Preset"
+        with patch("backend.stores.voice_presets.get_presets", return_value=[]), patch(
+            "backend.stores.voice_presets.get_default_preset", return_value="Ghost Preset"
         ):
             voice_id, speed, blend, modulation = server._resolve_voice_and_modulation(
                 self._req(), {"review_tts_voice_hint": "am_puck"}

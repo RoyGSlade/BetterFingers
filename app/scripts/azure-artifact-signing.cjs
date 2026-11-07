@@ -22,6 +22,9 @@ module.exports = async function azureArtifactSigning(configuration) {
   if (String(configuration.hash).toLowerCase() !== 'sha256') {
     throw new Error(`BetterFingers permits only SHA-256 signing, not ${configuration.hash}.`);
   }
+  if (!String(process.env.BETTERFINGERS_EXPECTED_SIGNER_SUBJECT || '').trim()) {
+    throw new Error('A verified BETTERFINGERS_EXPECTED_SIGNER_SUBJECT is required; use the signing wrapper.');
+  }
   if (!fs.existsSync(signingScript)) {
     throw new Error(`BetterFingers signing script is missing: ${signingScript}`);
   }
@@ -36,6 +39,7 @@ module.exports = async function azureArtifactSigning(configuration) {
     '-Path',
     configuration.path,
   ];
+  args.push('-PreserveValidSignatures');
 
   appendValue(args, '-SignToolPath', process.env.BETTERFINGERS_SIGNTOOL_PATH);
   appendValue(args, '-DlibPath', process.env.BETTERFINGERS_ARTIFACT_SIGNING_DLIB_PATH);

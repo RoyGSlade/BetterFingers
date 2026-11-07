@@ -21,9 +21,9 @@ class CloneStatusRouteTests(unittest.TestCase):
 
     def test_available_in_process_mechanism(self):
         with patch(
-            "voice_clone_engine.availability",
+            "backend.tts.voice_clone_engine.availability",
             return_value={"available": True, "reason": "", "setup_hint": "", "mechanism": "in-process"},
-        ), patch("voice_clone_engine.is_clone_runtime_provisioned", return_value=False):
+        ), patch("backend.tts.voice_clone_engine.is_clone_runtime_provisioned", return_value=False):
             with self._client() as client:
                 r = client.get("/tts/clone/status")
         self.assertEqual(r.status_code, 200)
@@ -38,14 +38,14 @@ class CloneStatusRouteTests(unittest.TestCase):
 
     def test_unavailable_reports_reason_and_setup_hint(self):
         with patch(
-            "voice_clone_engine.availability",
+            "backend.tts.voice_clone_engine.availability",
             return_value={
                 "available": False,
                 "reason": "voice-cloning dependencies not installed (kanade_tokenizer)",
                 "setup_hint": "Install the voice-cloning runtime from the models page.",
                 "mechanism": None,
             },
-        ), patch("voice_clone_engine.is_clone_runtime_provisioned", return_value=False):
+        ), patch("backend.tts.voice_clone_engine.is_clone_runtime_provisioned", return_value=False):
             with self._client() as client:
                 r = client.get("/tts/clone/status")
         body = r.json()
@@ -58,9 +58,9 @@ class CloneStatusRouteTests(unittest.TestCase):
 
     def test_side_runtime_provisioned_and_available(self):
         with patch(
-            "voice_clone_engine.availability",
+            "backend.tts.voice_clone_engine.availability",
             return_value={"available": True, "reason": "", "setup_hint": "", "mechanism": "side-runtime"},
-        ), patch("voice_clone_engine.is_clone_runtime_provisioned", return_value=True):
+        ), patch("backend.tts.voice_clone_engine.is_clone_runtime_provisioned", return_value=True):
             with self._client() as client:
                 r = client.get("/tts/clone/status")
         body = r.json()
@@ -74,14 +74,14 @@ class CloneStatusRouteTests(unittest.TestCase):
         # state the UI must be able to show -- provisioned=True doesn't
         # have to imply available=True.
         with patch(
-            "voice_clone_engine.availability",
+            "backend.tts.voice_clone_engine.availability",
             return_value={
                 "available": False,
                 "reason": "side-runtime interpreter missing",
                 "setup_hint": "Re-run provisioning from the models page.",
                 "mechanism": None,
             },
-        ), patch("voice_clone_engine.is_clone_runtime_provisioned", return_value=True):
+        ), patch("backend.tts.voice_clone_engine.is_clone_runtime_provisioned", return_value=True):
             with self._client() as client:
                 r = client.get("/tts/clone/status")
         body = r.json()

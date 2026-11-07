@@ -3,13 +3,13 @@
 import unittest
 from unittest.mock import patch
 
-import injection_pacing
-import injector as injector_mod
-from injector import InputInjector
+from backend.output import injection_pacing
+from backend.output import injector as injector_mod
+from backend.output.injector import InputInjector
 
 
 def _make_injector(config, method="xdotool"):
-    with patch("injector.load_profile", return_value=config):
+    with patch("backend.output.injector.load_profile", return_value=config):
         inj = InputInjector(profile_name="Default")
     inj.injection_method = method
     return inj
@@ -70,7 +70,7 @@ class TypeTextPacingTests(unittest.TestCase):
 class XdotoolArgvTests(unittest.TestCase):
     def test_xdotool_argv_includes_delay_flag(self):
         inj = _make_injector({}, method="xdotool")
-        with patch("injector._run_type_tool", return_value=True) as run:
+        with patch("backend.output.injector._run_type_tool", return_value=True) as run:
             inj._type_via_external_tool("hi", key_delay_ms=45)
         argv = run.call_args.args[0]
         self.assertIn("--delay", argv)
@@ -79,7 +79,7 @@ class XdotoolArgvTests(unittest.TestCase):
 
     def test_xdotool_argv_omits_delay_when_none(self):
         inj = _make_injector({}, method="xdotool")
-        with patch("injector._run_type_tool", return_value=True) as run:
+        with patch("backend.output.injector._run_type_tool", return_value=True) as run:
             inj._type_via_external_tool("hi", key_delay_ms=None)
         argv = run.call_args.args[0]
         self.assertNotIn("--delay", argv)

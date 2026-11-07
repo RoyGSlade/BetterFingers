@@ -5,12 +5,13 @@ param(
     # exercises upgrade-over-an-existing-install rather than only clean
     # install. When omitted, the upgrade leg is skipped.
     [string]$PreviousInstallerPath = "",
-    [string]$ExpectedVersion = "1.1.0-alpha.3",
+    [string]$ExpectedVersion = "1.1.0-alpha.4",
     [ValidateSet("NotSigned", "Valid")]
     [string]$ExpectedSignatureStatus = "NotSigned",
     # Azure Artifact Signing must prove the exact certificate identity, not
     # merely that Windows trusts whichever certificate signed the file.
     [string]$ExpectedSignerSubject = "",
+    [string]$NativePayloadReportPath = "",
     [switch]$ExerciseCleanupCategories
 )
 
@@ -30,6 +31,7 @@ $uninstallRegPath = $null
 $healthUrl = "http://127.0.0.1:8000/health"
 $runtimeStatusUrl = "http://127.0.0.1:8000/runtime/status"
 $runtimeVersionUrl = "http://127.0.0.1:8000/runtime/version"
+$whisperModelsUrl = "http://127.0.0.1:8000/models/whisper"
 $wakeDownloadUrl = "http://127.0.0.1:8000/wake/models/melspectrogram/download"
 $wakeDownloadStateUrl = "http://127.0.0.1:8000/wake/models/melspectrogram/download-state"
 $packagedStartupBudgetSeconds = 90
@@ -40,6 +42,10 @@ $previousDataDir = $env:BETTERFINGERS_DATA_DIR
 $previousAuthToken = $env:BETTERFINGERS_AUTH_TOKEN
 $canonicalDataRoot = Join-Path $env:APPDATA "BetterFingers"
 $canonicalDataRootExistedBefore = Test-Path -LiteralPath $canonicalDataRoot
+# Electron/Chromium renderer state lives in its own folder (the packaged app's
+# userData), which "remove my data" must clean too.
+$electronDataRoot = Join-Path $env:APPDATA "betterfingers-electron"
+$electronDataRootExistedBefore = Test-Path -LiteralPath $electronDataRoot
 $seedSettingsPath = $null
 $seedModelPath = $null
 $seedSettingsHash = $null
@@ -170,7 +176,8 @@ function Assert-AuthenticodeStatus {
         [string]$Path,
         [string]$Expected,
         [string]$Label,
-        [string]$ExpectedSubject = ""
+        [string]$ExpectedSubject = "",
+        [switch]$RequireTimestamp
     )
 
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
@@ -189,6 +196,90 @@ function Assert-AuthenticodeStatus {
             throw "$Label signer subject was '$actualSubject'; expected exactly '$ExpectedSubject'."
         }
     }
+    if ($RequireTimestamp -and $null -eq $signature.TimeStamperCertificate) {
+        throw "$Label lacked an RFC 3161 timestamp certificate."
+    }
+}
+
+function Assert-NativePayloadSignatures {
+    param(
+        [string]$RootPath,
+        [string]$ProductExecutablePath,
+        [ValidateSet("NotSigned", "Valid")]
+        [string]$ExpectedPublisherStatus,
+        [string]$ExpectedPublisherSubject = ""
+    )
+
+    if (-not (Test-Path -LiteralPath $RootPath -PathType Container)) {
+        throw "Installed application tree not found: $RootPath"
+    }
+    if (-not (Test-Path -LiteralPath $ProductExecutablePath -PathType Leaf)) {
+        throw "Installed backend executable not found: $ProductExecutablePath"
+    }
+
+    $payloadFiles = @(Get-ChildItem -LiteralPath $RootPath -File -Recurse |
+        Where-Object { @(".exe", ".dll", ".pyd", ".node") -contains $_.Extension.ToLowerInvariant() } |
+        Sort-Object FullName)
+    if ($payloadFiles.Count -eq 0) {
+        throw "Installed application tree contained no EXE, DLL, PYD, or NODE payload files: $RootPath"
+    }
+
+    $resolvedProductPath = (Resolve-Path -LiteralPath $ProductExecutablePath).Path
+    $sawProductExecutable = $false
+    $records = New-Object System.Collections.Generic.List[object]
+    foreach ($payloadFile in $payloadFiles) {
+        $resolvedPayloadPath = $payloadFile.FullName
+        $isProductExecutable = $resolvedPayloadPath.Equals(
+            $resolvedProductPath,
+            [StringComparison]::OrdinalIgnoreCase
+        )
+        if ($isProductExecutable) {
+            $sawProductExecutable = $true
+            Assert-AuthenticodeStatus `
+                -Path $resolvedPayloadPath `
+                -Expected $ExpectedPublisherStatus `
+                -Label "Installed backend executable" `
+                -ExpectedSubject $ExpectedPublisherSubject `
+                -RequireTimestamp:($ExpectedPublisherStatus -eq "Valid")
+        } elseif ($ExpectedPublisherStatus -eq "Valid") {
+            Assert-AuthenticodeStatus `
+                -Path $resolvedPayloadPath `
+                -Expected "Valid" `
+                -Label "Installed application native payload"
+        } else {
+            # Unsigned manual qualification builds may still contain valid
+            # Microsoft/vendor binaries. Accept Valid or NotSigned here, but
+            # reject every broken/untrusted status instead of pretending the
+            # unsigned build has passed the production WDAC gate.
+            $signature = Get-AuthenticodeSignature -FilePath $resolvedPayloadPath
+            $actual = $signature.Status.ToString()
+            Write-Host "Installed application native payload Authenticode status: $actual ($resolvedPayloadPath)"
+            if ($actual -notin @("Valid", "NotSigned")) {
+                throw "Installed application native payload '$resolvedPayloadPath' had invalid Authenticode status $actual."
+            }
+        }
+
+        $verifiedSignature = Get-AuthenticodeSignature -FilePath $resolvedPayloadPath
+        if ($verifiedSignature.Status -eq "Valid" -and
+            $null -eq $verifiedSignature.SignerCertificate) {
+            throw "Installed application native payload '$resolvedPayloadPath' lacked a signer certificate."
+        }
+        $records.Add([ordered]@{
+            path = $resolvedPayloadPath
+            sha256 = (Get-FileHash -LiteralPath $resolvedPayloadPath -Algorithm SHA256).Hash.ToLowerInvariant()
+            signatureStatus = $verifiedSignature.Status.ToString()
+            signerSubject = if ($null -eq $verifiedSignature.SignerCertificate) { "" } else { [string]$verifiedSignature.SignerCertificate.Subject }
+            signerThumbprint = if ($null -eq $verifiedSignature.SignerCertificate) { "" } else { [string]$verifiedSignature.SignerCertificate.Thumbprint }
+            timestampSubject = if ($null -eq $verifiedSignature.TimeStamperCertificate) { "" } else { [string]$verifiedSignature.TimeStamperCertificate.Subject }
+            timestampThumbprint = if ($null -eq $verifiedSignature.TimeStamperCertificate) { "" } else { [string]$verifiedSignature.TimeStamperCertificate.Thumbprint }
+        })
+    }
+
+    if (-not $sawProductExecutable) {
+        throw "Recursive installed-tree verification omitted the BetterFingers backend executable: $resolvedProductPath"
+    }
+    Write-Host "Verified $($payloadFiles.Count) installed-tree EXE/DLL/PYD signature(s)."
+    return $records.ToArray()
 }
 
 function Get-InstalledMetadata {
@@ -226,7 +317,12 @@ try {
         throw "Port 8000 was already in use before installer QA; refusing to test against an unowned backend."
     }
 
-    Assert-AuthenticodeStatus -Path $InstallerPath -Expected $ExpectedSignatureStatus -Label "Installer" -ExpectedSubject $ExpectedSignerSubject
+    Assert-AuthenticodeStatus `
+        -Path $InstallerPath `
+        -Expected $ExpectedSignatureStatus `
+        -Label "Installer" `
+        -ExpectedSubject $ExpectedSignerSubject `
+        -RequireTimestamp:($ExpectedSignatureStatus -eq "Valid")
 
     # This token is generated per run and inherited by Electron and its backend
     # through the environment. It is intentionally never printed or put in an
@@ -280,9 +376,42 @@ try {
         throw "Installed executable not found: $exePath"
     }
 
-    $backendExePath = Join-Path $installDir "resources\backend\betterfingers-backend.exe"
-    Assert-AuthenticodeStatus -Path $exePath -Expected $ExpectedSignatureStatus -Label "Installed application" -ExpectedSubject $ExpectedSignerSubject
-    Assert-AuthenticodeStatus -Path $backendExePath -Expected $ExpectedSignatureStatus -Label "Installed backend" -ExpectedSubject $ExpectedSignerSubject
+    $backendBundlePath = Join-Path $installDir "resources\backend\betterfingers-backend"
+    $backendExePath = Join-Path $backendBundlePath "betterfingers-backend.exe"
+    Assert-AuthenticodeStatus `
+        -Path $exePath `
+        -Expected $ExpectedSignatureStatus `
+        -Label "Installed application" `
+        -ExpectedSubject $ExpectedSignerSubject `
+        -RequireTimestamp:($ExpectedSignatureStatus -eq "Valid")
+    $installedNativePayloadRecords = @(Assert-NativePayloadSignatures `
+        -RootPath $installDir `
+        -ProductExecutablePath $backendExePath `
+        -ExpectedPublisherStatus $ExpectedSignatureStatus `
+        -ExpectedPublisherSubject $ExpectedSignerSubject)
+    if ([string]::IsNullOrWhiteSpace($NativePayloadReportPath)) {
+        $NativePayloadReportPath = "$([IO.Path]::GetFullPath($InstallerPath)).installed-native-verification.json"
+    }
+    $nativePayloadReportFullPath = [IO.Path]::GetFullPath($NativePayloadReportPath)
+    $nativePayloadReportDirectory = Split-Path -Parent $nativePayloadReportFullPath
+    if (-not (Test-Path -LiteralPath $nativePayloadReportDirectory -PathType Container)) {
+        New-Item -ItemType Directory -Path $nativePayloadReportDirectory -Force | Out-Null
+    }
+    $nativePayloadReport = [ordered]@{
+        schemaVersion = 1
+        installerPath = (Resolve-Path -LiteralPath $InstallerPath).Path
+        installRoot = (Resolve-Path -LiteralPath $installDir).Path
+        expectedPublisherStatus = $ExpectedSignatureStatus
+        expectedPublisherSubject = $ExpectedSignerSubject
+        verifiedAtUtc = [DateTime]::UtcNow.ToString("o")
+        artifacts = $installedNativePayloadRecords
+    }
+    [IO.File]::WriteAllText(
+        $nativePayloadReportFullPath,
+        ($nativePayloadReport | ConvertTo-Json -Depth 6),
+        (New-Object Text.UTF8Encoding($false))
+    )
+    Write-Host "Installed native-payload verification report: $nativePayloadReportFullPath"
 
     $installedMetadata = Get-InstalledMetadata
     $uninstallRegPath = $installedMetadata.PSPath
@@ -386,6 +515,27 @@ try {
     }
     Write-Host "Fresh installed launch passed without initializing or downloading an LLM."
 
+    # The installer ships the pinned base.en speech model and its MIT notices,
+    # so a fresh profile must report it installed (bundled) without any download.
+    $bundledModelDir = Join-Path $backendBundlePath "_internal\bundled_models\base.en"
+    foreach ($bundledFile in @("config.json", "model.bin", "tokenizer.json", "vocabulary.txt")) {
+        if (-not (Test-Path -LiteralPath (Join-Path $bundledModelDir $bundledFile) -PathType Leaf)) {
+            throw "Installed backend is missing the bundled speech model file $bundledFile."
+        }
+    }
+    $bundledNotice = Join-Path $backendBundlePath "_internal\bundled-base.en-NOTICE.txt"
+    if (-not (Test-Path -LiteralPath $bundledNotice -PathType Leaf) -or
+        -not (Select-String -LiteralPath $bundledNotice -SimpleMatch "Copyright (c) 2022 OpenAI" -Quiet) -or
+        -not (Select-String -LiteralPath $bundledNotice -SimpleMatch "Copyright (c) 2023 SYSTRAN" -Quiet)) {
+        throw "Installed backend is missing the bundled speech model's MIT notices."
+    }
+    $whisperModels = Invoke-AuthenticatedJson -Uri $whisperModelsUrl -Token $authToken
+    $bundledRow = @($whisperModels.models | Where-Object { $_.model_size -eq "base.en" -and $_.installed -eq $true -and $_.bundled -eq $true })
+    if ($bundledRow.Count -ne 1) {
+        throw "Fresh installed profile did not report the bundled base.en speech model as installed."
+    }
+    Write-Host "Installed app ships the bundled base.en speech model and its notices; fresh profile reports it installed."
+
     # Prove the packaged backend can perform a real outbound HTTPS download,
     # persist it into the isolated Windows data root, verify its pinned SHA,
     # and load-check the ONNX payload. This ~1.1 MB wake backbone exercises the
@@ -426,7 +576,12 @@ try {
         throw "Uninstaller not found in ${installDir} (looked for Uninstall*.exe)"
     }
     $uninstallerPath = $uninstaller.FullName
-    Assert-AuthenticodeStatus -Path $uninstallerPath -Expected $ExpectedSignatureStatus -Label "Uninstaller" -ExpectedSubject $ExpectedSignerSubject
+    Assert-AuthenticodeStatus `
+        -Path $uninstallerPath `
+        -Expected $ExpectedSignatureStatus `
+        -Label "Uninstaller" `
+        -ExpectedSubject $ExpectedSignerSubject `
+        -RequireTimestamp:($ExpectedSignatureStatus -eq "Valid")
 
     Write-Host "Running silent uninstall smoke test: $uninstallerPath"
     $uninstallerProcess = Start-Process -FilePath $uninstallerPath -ArgumentList "/S" -Wait -NoNewWindow -PassThru
@@ -475,18 +630,27 @@ try {
         if ($canonicalDataRootExistedBefore) {
             throw "Refusing category cleanup smoke because canonical data already existed before this run: $canonicalDataRoot"
         }
+        if ($electronDataRootExistedBefore) {
+            throw "Refusing category cleanup smoke because Electron data already existed before this run: $electronDataRoot"
+        }
         $categoryCases = @(
-            @{ Flag = "/BF_DELETE_MODELS"; Selected = @("models\smoke.bin", "wake_models\smoke.bin") },
-            @{ Flag = "/BF_DELETE_RECORDINGS"; Selected = @("recordings\smoke.wav", "voices\smoke.wav") },
-            @{ Flag = "/BF_DELETE_HISTORY"; Selected = @("draft_history.json", "history.db", "exports\smoke.txt") },
-            @{ Flag = "/BF_DELETE_SETTINGS"; Selected = @("profiles\smoke.yaml", "contacts.json", "launcher_workflows.json") },
-            @{ Flag = "/BF_DELETE_LOGS"; Selected = @("tmp\smoke.tmp", "logs\smoke.log", "debug.log") }
+            @{ Flag = "/BF_DELETE_MODELS"; Selected = @("models\smoke.bin", "wake_models\smoke.bin", "tts\kokoro_onnx\smoke.bin"); ElectronSelected = @() },
+            @{ Flag = "/BF_DELETE_RECORDINGS"; Selected = @("recordings\smoke.wav", "voices\smoke.wav"); ElectronSelected = @() },
+            @{ Flag = "/BF_DELETE_HISTORY"; Selected = @("draft_history.json", "history.db", "exports\smoke.txt"); ElectronSelected = @() },
+            @{ Flag = "/BF_DELETE_SETTINGS"; Selected = @("profiles\smoke.yaml", "contacts.json", "launcher_workflows.json", "persona_drafts.json"); ElectronSelected = @("Local Storage\leveldb\smoke.ldb", "overlay-position.json") },
+            @{ Flag = "/BF_DELETE_LOGS"; Selected = @("tmp\smoke.tmp", "logs\smoke.log", "debug.log", "audio_privacy_journal.json"); ElectronSelected = @("Cache\smoke.bin", "sidecar_backend_raw.log") }
         )
         $allCategoryPaths = @($categoryCases | ForEach-Object { $_.Selected } | ForEach-Object { $_ })
+        $allElectronPaths = @($categoryCases | ForEach-Object { $_.ElectronSelected } | ForEach-Object { $_ })
         foreach ($case in $categoryCases) {
             Install-Silently -Path $InstallerPath
             foreach ($relativePath in $allCategoryPaths) {
                 $target = Join-Path $canonicalDataRoot $relativePath
+                New-Item -ItemType Directory -Force -Path (Split-Path -Parent $target) | Out-Null
+                [IO.File]::WriteAllText($target, "owned installer cleanup smoke", [Text.Encoding]::UTF8)
+            }
+            foreach ($relativePath in $allElectronPaths) {
+                $target = Join-Path $electronDataRoot $relativePath
                 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $target) | Out-Null
                 [IO.File]::WriteAllText($target, "owned installer cleanup smoke", [Text.Encoding]::UTF8)
             }
@@ -506,11 +670,19 @@ try {
                     throw "$($case.Flag) removed an unselected category path: $relativePath"
                 }
             }
+            foreach ($relativePath in $allElectronPaths) {
+                $exists = Test-Path -LiteralPath (Join-Path $electronDataRoot $relativePath)
+                if ($case.ElectronSelected -contains $relativePath) {
+                    if ($exists) { throw "$($case.Flag) left selected Electron data behind: $relativePath" }
+                } elseif (-not $exists) {
+                    throw "$($case.Flag) removed an unselected Electron path: $relativePath"
+                }
+            }
             if (Test-Path -LiteralPath $metadata.PSPath) {
                 throw "$($case.Flag) left an uninstall registry entry behind."
             }
         }
-        Write-Host "Every optional uninstall category removed only its selected canonical paths."
+        Write-Host "Every optional uninstall category removed only its selected canonical and Electron paths."
     }
 
     $legs = if ($PreviousInstallerPath -ne "") { "install + upgrade + uninstall" } else { "install + uninstall" }
@@ -530,6 +702,10 @@ try {
         # The test owned this previously-absent exact root. Never clean a root
         # that predated the run.
         Remove-Item -LiteralPath $canonicalDataRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    if (-not $electronDataRootExistedBefore -and (Test-Path -LiteralPath $electronDataRoot)) {
+        # Same rule for the Electron folder: only a root this run created.
+        Remove-Item -LiteralPath $electronDataRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
     if ($null -eq $previousDataDir) {
         Remove-Item Env:BETTERFINGERS_DATA_DIR -ErrorAction SilentlyContinue

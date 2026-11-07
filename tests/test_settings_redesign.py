@@ -11,7 +11,7 @@ sys.modules["pynput.keyboard"] = MagicMock()
 sys.modules["sounddevice"] = MagicMock()
 
 from fastapi.testclient import TestClient
-import utils
+from backend.config import utils
 import server
 
 
@@ -83,7 +83,7 @@ class SettingsRedesignTests(unittest.TestCase):
 
     def test_atomic_save_and_backup(self):
         with tempfile.TemporaryDirectory() as tmp:
-            with patch("utils.get_profiles_dir", return_value=tmp):
+            with patch("backend.config.utils.get_profiles_dir", return_value=tmp):
                 profile_name = "test_atomic_profile"
                 file_path = os.path.join(tmp, f"{profile_name}.yaml")
                 
@@ -113,9 +113,9 @@ class SettingsRedesignTests(unittest.TestCase):
 
     def test_api_rename_duplicate_export_import(self):
         with tempfile.TemporaryDirectory() as tmp:
-            with patch("utils.get_profiles_dir", return_value=tmp), patch.object(
+            with patch("backend.config.utils.get_profiles_dir", return_value=tmp), patch.object(
                 server, "get_profiles_dir", return_value=tmp
-            ), patch("utils._app_state_path", return_value=os.path.join(tmp, "app_state.yaml")):
+            ), patch("backend.config.utils._app_state_path", return_value=os.path.join(tmp, "app_state.yaml")):
                 with TestClient(server.app) as client:
                     # 1. Create a profile
                     create_res = client.post("/settings/profiles", json={

@@ -3,7 +3,7 @@ import os
 import pytest
 from fastapi import HTTPException
 
-from project_generator import ProjectGenerator, ProjectPathRefused, resolve_target_dir
+from backend.dev.project_generator import ProjectGenerator, ProjectPathRefused, resolve_target_dir
 
 _PLAN = {"title": "Demo", "phases": []}
 
@@ -44,7 +44,12 @@ def test_symlink_escape_is_refused(tmp_path):
     outside.mkdir()
 
     link = root / "escape-link"
-    link.symlink_to(outside, target_is_directory=True)
+    try:
+        link.symlink_to(outside, target_is_directory=True)
+    except OSError as exc:
+        if os.name == "nt":
+            pytest.skip(f"Windows symlink creation unavailable: {exc}")
+        raise
     target = link / "project"
 
     with pytest.raises(ProjectPathRefused):

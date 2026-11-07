@@ -10,7 +10,7 @@ honors the selection while falling back to True Janitor for empty or stale
 import unittest
 from unittest.mock import patch
 
-import llm_engine as le
+from backend.llm import llm_engine as le
 
 
 class ResolveDictationPresetTests(unittest.TestCase):
@@ -25,23 +25,23 @@ class ResolveDictationPresetTests(unittest.TestCase):
     def test_internal_preset_check_precedes_persona_lookup(self):
         # An internal preset must resolve even if the persona store is unavailable,
         # so the internal check has to short-circuit before get_persona.
-        with patch("llm_engine.get_persona", side_effect=AssertionError("must not be called")):
+        with patch("backend.llm.llm_engine.get_persona", side_effect=AssertionError("must not be called")):
             self.assertEqual(le.resolve_dictation_preset("Plan Generator"), "Plan Generator")
 
-    @patch("llm_engine.get_persona", return_value={"name": "Court Reporter"})
+    @patch("backend.llm.llm_engine.get_persona", return_value={"name": "Court Reporter"})
     def test_known_persona_is_honored(self, _gp):
         self.assertEqual(le.resolve_dictation_preset("Court Reporter"), "Court Reporter")
 
-    @patch("llm_engine.get_persona", return_value=None)
+    @patch("backend.llm.llm_engine.get_persona", return_value=None)
     def test_unknown_or_deleted_persona_falls_back(self, _gp):
         self.assertEqual(le.resolve_dictation_preset("Deleted Persona"), "True Janitor")
 
-    @patch("llm_engine.get_persona", return_value={"name": "True Janitor"})
+    @patch("backend.llm.llm_engine.get_persona", return_value={"name": "True Janitor"})
     def test_true_janitor_selection_is_honored(self, _gp):
         self.assertEqual(le.resolve_dictation_preset("True Janitor"), "True Janitor")
 
     def test_surrounding_whitespace_is_trimmed(self):
-        with patch("llm_engine.get_persona", return_value={"name": "Court Reporter"}) as gp:
+        with patch("backend.llm.llm_engine.get_persona", return_value={"name": "Court Reporter"}) as gp:
             self.assertEqual(le.resolve_dictation_preset("  Court Reporter  "), "Court Reporter")
             # The lookup used the trimmed name, not the padded one.
             gp.assert_called_once_with("Court Reporter")

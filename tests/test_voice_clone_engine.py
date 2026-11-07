@@ -17,8 +17,8 @@ import numpy as np
 from fastapi.testclient import TestClient
 
 import server
-import tts_engine
-import voice_clone_engine
+from backend.tts import tts_engine
+from backend.tts import voice_clone_engine
 
 
 class ClonedIdTests(unittest.TestCase):
@@ -204,7 +204,7 @@ class ConvertDispatchTests(unittest.TestCase):
     tearDown = setUp
 
     def test_dispatches_to_side_runtime_when_in_process_missing_and_provisioned(self):
-        with patch("voice_clone_engine.importlib.util.find_spec", return_value=None), \
+        with patch("backend.tts.voice_clone_engine.importlib.util.find_spec", return_value=None), \
              patch.object(voice_clone_engine, "is_clone_runtime_provisioned", return_value=True), \
              patch.object(voice_clone_engine, "_convert_via_side_runtime",
                           return_value=(np.zeros(4), 24000)) as side_runtime, \
@@ -215,7 +215,7 @@ class ConvertDispatchTests(unittest.TestCase):
         self.assertEqual(sr, 24000)
 
     def test_falls_through_to_in_process_when_not_provisioned(self):
-        with patch("voice_clone_engine.importlib.util.find_spec", return_value=None), \
+        with patch("backend.tts.voice_clone_engine.importlib.util.find_spec", return_value=None), \
              patch.object(voice_clone_engine, "is_clone_runtime_provisioned", return_value=False), \
              patch.object(voice_clone_engine, "_convert_via_side_runtime") as side_runtime, \
              patch.object(voice_clone_engine, "_convert", return_value=(np.zeros(4), 16000)) as in_process:
@@ -228,7 +228,7 @@ class ConvertDispatchTests(unittest.TestCase):
         # side-runtime dispatch must not preempt the (faster, no-subprocess)
         # in-process path even if a side-runtime happens to ALSO be provisioned.
         fake_spec = object()
-        with patch("voice_clone_engine.importlib.util.find_spec", return_value=fake_spec), \
+        with patch("backend.tts.voice_clone_engine.importlib.util.find_spec", return_value=fake_spec), \
              patch.object(voice_clone_engine, "is_clone_runtime_provisioned", return_value=True), \
              patch.object(voice_clone_engine, "_convert_via_side_runtime") as side_runtime, \
              patch.object(voice_clone_engine, "_convert", return_value=(np.zeros(4), 16000)) as in_process:
@@ -255,7 +255,7 @@ class SideRuntimeSubprocessTests(unittest.TestCase):
             fake_result = type("R", (), {"returncode": 1, "stderr": "boom: bad tensor shape", "stdout": ""})()
             with patch.object(voice_clone_engine, "clone_runtime_python_path", return_value=python_path), \
                  patch.object(voice_clone_engine, "clone_runtime_dir", return_value=d), \
-                 patch("voice_clone_engine.subprocess.run", return_value=fake_result):
+                 patch("backend.tts.voice_clone_engine.subprocess.run", return_value=fake_result):
                 with self.assertRaises(RuntimeError) as ctx:
                     voice_clone_engine._convert_via_side_runtime(
                         np.zeros(10, dtype=np.float32), 16000, "ref.wav"
@@ -283,7 +283,7 @@ class SideRuntimeSubprocessTests(unittest.TestCase):
 
             with patch.object(voice_clone_engine, "clone_runtime_python_path", return_value=python_path), \
                  patch.object(voice_clone_engine, "clone_runtime_dir", return_value=d), \
-                 patch("voice_clone_engine.subprocess.run", side_effect=fake_run):
+                 patch("backend.tts.voice_clone_engine.subprocess.run", side_effect=fake_run):
                 audio, sr = voice_clone_engine._convert_via_side_runtime(
                     np.zeros(10, dtype=np.float32), 16000, "ref.wav"
                 )

@@ -173,7 +173,7 @@ class ContactRoutesTests(unittest.TestCase):
         """save_profile REPLACES the profile with what it is given, which is
         exactly why this is a route rather than a one-key write from the
         renderer: doing it client-side would reset every other setting."""
-        from utils import get_last_active_profile, load_profile, save_profile
+        from backend.config.utils import get_last_active_profile, load_profile, save_profile
 
         lazy, transcriber = self._ctx()
         with lazy, transcriber, self._client() as client:
@@ -355,7 +355,7 @@ class ContactGeneratorResolutionTests(unittest.TestCase):
                 raise AssertionError("compile must not boot the model by default")
 
         with patch.object(server, "get_selected_llm_engine", return_value=_Engine()), \
-                patch("llm_engine.is_server_running", return_value=False):
+                patch("backend.llm.llm_engine.is_server_running", return_value=False):
             self.assertIsNone(contacts_routes._resolve_generator(False))
 
     def test_wait_for_model_boots_it(self):

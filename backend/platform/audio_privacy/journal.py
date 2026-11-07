@@ -61,7 +61,7 @@ def default_journal_path() -> str:
     Imported lazily so this module stays importable (and unit-testable) in a
     bare interpreter with no profile directory.
     """
-    from utils import get_user_data_path
+    from backend.config.utils import get_user_data_path
 
     return os.path.join(get_user_data_path(), JOURNAL_FILENAME)
 

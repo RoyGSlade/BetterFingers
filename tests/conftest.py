@@ -14,6 +14,7 @@ eager startup for the whole suite if ever needed.
 import os
 import sys
 import tempfile
+import threading
 
 import pytest
 
@@ -154,7 +155,7 @@ def _forbid_real_data_root(monkeypatch):
     that reaches a real root now fails with a message naming the path, instead
     of quietly destroying it.
     """
-    import app_paths
+    from backend.config import app_paths
 
     real_resolve = app_paths.resolve_base
 
@@ -176,6 +177,53 @@ def _forbid_real_data_root(monkeypatch):
 
     monkeypatch.setattr(app_paths, "resolve_base", guarded_resolve_base)
     yield
+
+
+# Files that exercise the signed-approval gate for real. Everywhere else the
+# gate is relaxed (backend.services.approvals.ENFORCE = False) so the ~100 older
+# tests of persona learning, drafts and the like, which were written when
+# "approved" was a request boolean, still test what they were written to test.
+# The enforced files below are where the gate itself is proven, route by route.
+APPROVAL_ENFORCED_FILES = frozenset({
+    "test_approvals.py",
+    "test_approval_routes.py",
+    "test_workflow_store.py",
+    "test_action_routes.py",
+    "test_red_team_phase0.py",
+})
+
+
+@pytest.fixture(autouse=True)
+def _no_leaked_runtime_token():
+    """The in-memory bearer token (backend.api.security) is process-global. A test that leaves
+    one behind turns every later TestClient request into a 401 and then a 429, so reset it
+    around every test (round 2, item 3)."""
+    from backend.api import security
+
+    security.set_runtime_token(None)
+    yield
+    security.set_runtime_token(None)
+
+
+@pytest.fixture(autouse=True)
+def _approval_gate_mode(request):
+    from backend.services import approvals
+
+    enforced = (
+        os.path.basename(str(request.node.fspath)) in APPROVAL_ENFORCED_FILES
+        or request.node.get_closest_marker("approvals_enforced") is not None
+    )
+    saved = approvals.ENFORCE
+    approvals.reset()
+    approvals.ENFORCE = enforced
+    if enforced:
+        sys.path.insert(0, os.path.dirname(__file__))
+        import approval_support
+
+        approvals.configure(approval_support.TEST_KEY)
+    yield
+    approvals.ENFORCE = saved
+    approvals.reset()
 
 
 @pytest.fixture
@@ -240,6 +288,14 @@ def _no_warm_start_model_loads(request, monkeypatch):
 
     test_server_lazy_startup exercises warm-start on purpose (with its own
     mocks of the inner loaders), so it is excluded.
+
+    Speech-to-text preloads by a second route: the lifespan's
+    "betterfingers-warmup" thread calls ensure_transcriber_initialized(
+    preload=<model_keep_stt_loaded>, default True), which loaded the REAL
+    Whisper model from the user's Hugging Face cache and ran a CUDA probe
+    inside unit tests (seen 2026-10-04: a second CUDA probe in one process
+    hung forever). Only that thread's preload is dropped; tests that call
+    ensure_transcriber_initialized themselves are unaffected.
     """
     if request.module.__name__ == "test_server_lazy_startup":
         yield
@@ -248,5 +304,15 @@ def _no_warm_start_model_loads(request, monkeypatch):
     if server_mod is not None and hasattr(server_mod, "warm_start_resident_models"):
         monkeypatch.setattr(
             server_mod, "warm_start_resident_models", lambda settings=None: {}
+        )
+    original_ensure = getattr(server_mod, "ensure_transcriber_initialized", None)
+    if original_ensure is not None:
+        def _ensure_without_warmup_preload(preload=False):
+            if threading.current_thread().name == "betterfingers-warmup":
+                preload = False
+            return original_ensure(preload=preload)
+
+        monkeypatch.setattr(
+            server_mod, "ensure_transcriber_initialized", _ensure_without_warmup_preload
         )
     yield

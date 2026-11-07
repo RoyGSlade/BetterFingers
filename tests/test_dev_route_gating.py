@@ -72,3 +72,15 @@ def test_every_dev_route_is_not_404_with_the_flag_on(client, monkeypatch):
     for method, path in DEV_ROUTES:
         response = client.request(method, path, json={} if method == "POST" else None)
         assert response.status_code != 404, f"{method} {path} was gated even with the flag on"
+
+
+def test_project_export_stays_in_the_downloads_folder(client, monkeypatch, tmp_path):
+    # The title becomes the file name: separators and dots are replaced, and the joined path
+    # is checked to be a direct child of the Downloads folder before anything is written.
+    monkeypatch.setenv("BETTERFINGERS_DEV_ROUTES", "1")
+    monkeypatch.setattr(server, "_get_downloads_dir", lambda: str(tmp_path))
+    response = client.post("/project/export", json={"title": "../../evil", "content": "x", "plan": {}})
+    assert response.status_code == 200, response.text
+    written = response.json()["path"]
+    assert written == str(tmp_path / "______evil_Export.zip")
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["______evil_Export.zip"]

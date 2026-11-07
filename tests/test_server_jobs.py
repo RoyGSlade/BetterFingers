@@ -7,7 +7,7 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 import server
-from job_manager import JOBS, JobState
+from backend.runtime.job_manager import JOBS, JobState
 
 
 class DummyTranscriber:

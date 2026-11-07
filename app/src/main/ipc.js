@@ -1,8 +1,11 @@
 const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
-const { app, clipboard, ipcMain, shell } = require('electron');
-const { isTrustedRendererUrl } = require('./senderValidation');
+const { app, clipboard, dialog, ipcMain, session, shell, webContents } = require('electron');
+const { isTrustedRendererUrl, pageNameOf } = require('./senderValidation');
+const { isPageAllowed } = require('./ipcPolicy');
+const { deletionRan, finishFactoryReset } = require('./rendererState');
+const { evaluateOpenTarget: evaluateOpenTargetPolicy } = require('./openPathPolicy');
 
 let overlayHideTimer = null;
 
@@ -30,6 +33,21 @@ function isTrustedSender(event) {
   });
 }
 
+// Trusted AND allowed for this channel: the page must be one the channel is open to
+// (ipcPolicy.js), so the overlay, review window and splash cannot call the
+// dashboard's channels even if they somehow held the bridge method.
+function isAllowedSender(event, channel) {
+  if (!isTrustedSender(event)) return false;
+  // Top frame only: a subframe (which the CSP forbids anyway) is never a caller.
+  const main = event?.sender?.mainFrame;
+  if (main && event.senderFrame !== main) return false;
+  const page = pageNameOf(event.senderFrame.url, {
+    rendererDir: rendererDir(),
+    devOrigin: process.env.ELECTRON_RENDERER_URL,
+  });
+  return isPageAllowed(channel, page);
+}
+
 function rejectUntrusted(event, channel) {
   const url = event?.senderFrame?.url || '(no frame)';
   console.warn(`[ipc] Rejected '${channel}' from untrusted sender: ${url}`);
@@ -39,7 +57,7 @@ function rejectUntrusted(event, channel) {
 // ipcMain.handle with a mandatory sender check.
 function handleTrusted(channel, handler) {
   ipcMain.handle(channel, (event, ...args) => {
-    if (!isTrustedSender(event)) {
+    if (!isAllowedSender(event, channel)) {
       return rejectUntrusted(event, channel);
     }
     return handler(event, ...args);
@@ -49,7 +67,7 @@ function handleTrusted(channel, handler) {
 // ipcMain.on (fire-and-forget) with a mandatory sender check.
 function onTrusted(channel, handler) {
   ipcMain.on(channel, (event, ...args) => {
-    if (!isTrustedSender(event)) {
+    if (!isAllowedSender(event, channel)) {
       rejectUntrusted(event, channel);
       return;
     }
@@ -69,30 +87,35 @@ function allowedOpenRoots() {
   return roots.map((r) => path.resolve(r));
 }
 
-function isAllowedOpenTarget(targetPath) {
-  let resolved;
-  try {
-    resolved = fs.realpathSync(path.resolve(String(targetPath)));
-  } catch {
-    return false; // must exist
-  }
-  return allowedOpenRoots().some(
-    (root) => resolved === root || resolved.startsWith(root + path.sep),
-  );
+// Containment AND file-type policy live in openPathPolicy.js (Phase 0 item 8).
+function evaluateOpenTarget(targetPath) {
+  return evaluateOpenTargetPolicy(targetPath, { roots: allowedOpenRoots() });
 }
 
 function registerIpc({
-  getMainWindow, getSidecarStatus, getSidecarLogs, getAuthToken, getBackendOrigin, onQuit, onShow,
-  onSplashRetry, getSplashBootState, updateController, onRuntimeStatus,
+  getMainWindow, getSidecarStatus, getSidecarLogs, getAuthToken, getApprovalKey, getBackendOrigin, onQuit, onShow,
+  onSplashRetry, getSplashBootState, updateController, onRuntimeStatus, onConsentChanged,
+  onFactoryResetStart, onFactoryResetEnd,
 } = {}) {
   const backendProxy = require('./backendProxy');
+  const { createBugReportController } = require('./bugReportController');
+  const bugReportController = createBugReportController({
+    backendProxy,
+    dialog,
+    shell,
+    clipboard,
+  });
 
   // Phase 3c: the token is never exposed to the renderer. All backend HTTP
   // goes through this validated proxy (origin-locked, method/path allowlisted,
   // body-size capped); the credential stays in the main process.
-  handleTrusted('backend:request', (_event, req) => {
+  handleTrusted('backend:request', (event, req) => {
     const { method, path, body, timeoutMs } = req || {};
-    return backendProxy.request({ method, path, body, timeoutMs });
+    // The review window gets a much smaller route table than the dashboard (round 2, item 7).
+    // The profile comes from the PAGE main sees, never from anything the page sends.
+    const page = pageNameOf(event.senderFrame.url, { rendererDir: rendererDir(), devOrigin: process.env.ELECTRON_RENDERER_URL });
+    const profile = page === 'review-overlay.html' ? 'review' : 'dashboard';
+    return backendProxy.request({ method, path, body, timeoutMs, profile });
   });
 
   // Typed channels for destructive/sensitive operations. Each maps to exactly
@@ -103,27 +126,154 @@ function registerIpc({
     return backendProxy.fetchHealth({ timeoutMs });
   });
 
-  handleTrusted('backend:send-draft', (_event, req) => {
-    const { id, action, openChat, allowResend, timeoutMs } = req || {};
-    return backendProxy.sendDraft({ id, action, openChat, allowResend, timeoutMs });
+  // The approval broker (Phase 0 items 1-3). The renderer can ASK for one of
+  // these; each shows a native dialog with the exact content, and only a click on
+  // Approve makes main sign the ticket the backend demands. A renderer never sees
+  // the key or a ticket and cannot obtain a "yes" any other way.
+  const { createApprovalBroker } = require('./approvalBroker');
+  const { createRunAuthorizations, canonicalJson } = require('./runAuthorization');
+  // One store shared by the broker (which issues a run authorization after a click) and the
+  // workflow executor (which consumes it before running anything). Round 3, items 1 and 2.
+  const runAuthorizations = createRunAuthorizations();
+  // MAIN's own client for routes the renderer may not reach. Main-process code names the route;
+  // it is never handed to an IPC channel.
+  const trustedBackend = { send: (method, path, body, timeoutMs) => backendProxy.sendTrusted(method, path, body, timeoutMs) };
+  let approvalBroker = null;
+  function broker() {
+    if (!approvalBroker) {
+      const keyHex = typeof getApprovalKey === 'function' ? getApprovalKey() : '';
+      approvalBroker = createApprovalBroker({
+        secret: Buffer.from(String(keyHex || ''), 'hex'),
+        dialog,
+        getParentWindow: () => {
+          const win = getMainWindow?.();
+          return win && !win.isDestroyed() ? win : null;
+        },
+        backend: trustedBackend,
+        listApplications: () => applicationRegistry().list(),
+        planLaunch: (entry) => applicationLauncher().planFor(entry),
+        // A smaller screen gets a smaller line budget (measured: a 26-line dialog is ~593 px).
+        getBudgets: () => {
+          const { screen } = require('electron');
+          const height = screen && typeof screen.getPrimaryDisplay === 'function'
+            ? screen.getPrimaryDisplay().workAreaSize.height : 0;
+          return height > 0 ? { lines: Math.max(10, Math.floor((height - 160) / 20)) } : {};
+        },
+        runAuthorizations,
+        log: (line) => console.warn(line),
+      });
+      // The send hotkey opens the native approval dialog; it never signs by itself.
+      require('./hotkeys').setPrimaryActionHandler((press) => broker().placeFromHotkey(press));
+    }
+    return approvalBroker;
+  }
+  // Create it now so the hotkey signer is installed before the first key press.
+  setImmediate(() => { try { broker(); } catch (error) { console.error('[approval] broker unavailable:', error.message); } });
+
+  // Spoken requests (round 2, item 6). The backend announces that a draft placement was
+  // REQUESTED by voice; the native dialog is the only thing that
+  // can confirm it. Main listens to the backend's own status events, so a page cannot forge or
+  // suppress one by what it relays.
+  backendProxy.onBackendEvent((message) => {
+    if (!message || typeof message !== 'object') return;
+    const draftId = Number.isInteger(message.draft_id) ? message.draft_id : null;
+    // Only "send it" opens a dialog. There is no voice-confirmation flow (round 3, item 6).
+    if (message.status === 'command_needs_tap' && message.action === 'send') {
+      broker().presentVoiceTap({ draftId }).catch(() => {});
+    }
   });
 
+  handleTrusted('approvals:workflow', (_event, req) => {
+    const { workflowId } = req || {};
+    return broker().approveWorkflow(workflowId);
+  });
+
+  handleTrusted('approvals:persona-example', (_event, req) => {
+    const { persona, raw, out, timeoutMs } = req || {};
+    return broker().addPersonaExample({ persona, raw, out, timeoutMs });
+  });
+
+  handleTrusted('approvals:persona-save', (_event, req) => {
+    const { name, body, timeoutMs } = req || {};
+    return broker().savePersona({ name, body, timeoutMs });
+  });
+
+  // Round 3, item 3: removing a learned example is an example change too.
+  handleTrusted('approvals:persona-learned-delete', (_event, req) => {
+    const { persona, exampleId, timeoutMs } = req || {};
+    return broker().deleteLearnedExample({ persona, exampleId, timeoutMs });
+  });
+
+  // Round 4, item 3 (Codex re-check 3, finding 3): clearing a persona's learned examples and
+  // deleting a persona are example changes; each is a native dialog bound to its scope. These
+  // routes are no longer in the dashboard proxy. (There is no MCP trust channel any more: round 4,
+  // item 4.)
+  handleTrusted('approvals:persona-learned-clear', (_event, req) => {
+    const { persona, timeoutMs } = req || {};
+    return broker().clearLearnedExamples({ persona, timeoutMs });
+  });
+
+  handleTrusted('approvals:persona-delete', (_event, req) => {
+    const { name, timeoutMs } = req || {};
+    return broker().deletePersona({ name, timeoutMs });
+  });
+
+  handleTrusted('backend:send-draft', (_event, req) => {
+    const { id, action, openChat, allowResend, timeoutMs } = req || {};
+    return broker().sendDraft({ id, action, openChat, allowResend, timeoutMs });
+  });
+
+  handleTrusted('backend:primary-action', (_event, req) => {
+    const { timeoutMs } = req || {};
+    return broker().primaryActionFromUi({ timeoutMs });
+  });
+
+  // Round 4, item 3: every privacy wipe deletes learned examples, so the renderer's `confirm`
+  // boolean is ignored; the native dialog (scope from the backend's own inventory) is the gate.
   handleTrusted('backend:wipe-privacy', (_event, req) => {
-    const { wipeVoices, confirm, mode, timeoutMs } = req || {};
-    return backendProxy.wipePrivacyData({ wipeVoices, confirm, mode, timeoutMs });
+    const { wipeVoices, mode, timeoutMs } = req || {};
+    return broker().wipePrivacy({ wipeVoices, mode, timeoutMs });
   });
 
   // Wave 6: the factory-reset executor. Its own channel rather than a mode on
   // the wipe above, because it takes a different gate (an exact phrase, not a
   // boolean) and erases settings and the consent record too.
-  handleTrusted('backend:factory-reset', (_event, req) => {
+  //
+  // The backend can only sweep the unified data root. What Chromium keeps for
+  // the renderer (Local Storage with the first-run flags and the legacy consent
+  // flag, Session Storage, caches) lives in Electron's own userData folder, so
+  // main finishes the job here and folds the outcome into the response -- a
+  // reset the renderer state survived is reported as failed, never as fresh.
+  // See rendererState.js for the live clear and the pending-until-restart purge.
+  handleTrusted('backend:factory-reset', async (_event, req) => {
     const { confirm, deleteDownloadedModels, timeoutMs } = req || {};
-    return backendProxy.factoryReset({ confirm, deleteDownloadedModels, timeoutMs });
+    // The raw sidecar log is one of the files the reset deletes, and main would
+    // recreate it from the backend's own output within the second. Switch file
+    // logging off BEFORE the request (so nothing can race the deletion) and back
+    // on only if the reset turns out not to have deleted anything.
+    onFactoryResetStart?.();
+    let deleted = false;
+    try {
+      // The typed phrase AND a native dialog (round 4, item 3): the phrase alone is a value a page
+      // can send by itself.
+      const result = await broker().factoryReset({ confirm, deleteDownloadedModels, timeoutMs });
+      deleted = deletionRan(result);
+      const finished = await finishFactoryReset(result, {
+        session: session.defaultSession,
+        webContents,
+        userDataDir: app.getPath('userData'),
+      });
+      onConsentChanged?.();
+      return finished;
+    } finally {
+      onFactoryResetEnd?.({ deleted });
+    }
   });
 
+  // Round 4, item 3: the global learning wipe used to accept the page's `confirm: true`.
   handleTrusted('backend:clear-persona-learning', (_event, req) => {
-    const { confirm, timeoutMs } = req || {};
-    return backendProxy.clearPersonaLearning({ confirm, timeoutMs });
+    const { timeoutMs } = req || {};
+    return broker().clearAllLearning({ timeoutMs });
   });
 
   handleTrusted('backend:delete-llm-model', (_event, req) => {
@@ -166,6 +316,22 @@ function registerIpc({
     return { ok: true };
   });
 
+  // Bug reports are privileged for two reasons: main collects the diagnostic
+  // projection itself (the renderer cannot attach arbitrary logs), and only
+  // main can show the final native confirmation or contact the configured
+  // HTTPS relay. Destructure every renderer payload to the fixed schema.
+  handleTrusted('bug-report:get-config', () => bugReportController.getConfig());
+
+  handleTrusted('bug-report:prepare', (_event, payload) => {
+    const { summary, steps, expected, actual, contact } = payload || {};
+    return bugReportController.prepare({ summary, steps, expected, actual, contact });
+  });
+
+  handleTrusted('bug-report:submit', (_event, payload) => {
+    const { previewId, destination } = payload || {};
+    return bugReportController.submit({ previewId, destination });
+  });
+
   // OR-02: the startup splash's own channel. splash:get-state backs a pull for
   // a page that finishes loading after boot already started (and would
   // otherwise miss the events pushed before it was listening); splash:retry is
@@ -188,24 +354,29 @@ function registerIpc({
   });
 
   // Durable onboarding consent record (unified data root, not Electron
-  // userData). consentVersion is sanitized to a finite number — the renderer
-  // must never write an arbitrary value into the consent record.
+  // userData). Acceptance uses the main process current version; a renderer
+  // cannot invent a future consent version.
   const onboardingStore = require('./onboardingStore');
   handleTrusted('onboarding:get-state', () => onboardingStore.readState());
-  handleTrusted('onboarding:accept', (_event, req) => onboardingStore.recordAcceptance({
-    consentVersion: Number.isFinite(req?.consentVersion) ? req.consentVersion : undefined,
-  }));
+  handleTrusted('onboarding:accept', () => {
+    const result = onboardingStore.recordAcceptance();
+    if (result.ok) onConsentChanged?.();
+    return result;
+  });
   handleTrusted('onboarding:complete-step', (_event, req) =>
     onboardingStore.recordStepComplete(String(req?.stepId || '')));
-  handleTrusted('onboarding:migrate-legacy', (_event, req) =>
-    onboardingStore.migrateLegacyCompletion({ legacyComplete: Boolean(req?.legacyComplete) }));
+  handleTrusted('onboarding:migrate-legacy', (_event, req) => {
+    const result = onboardingStore.migrateLegacyCompletion({ legacyComplete: Boolean(req?.legacyComplete) });
+    if (result.migrated && result.ok) onConsentChanged?.();
+    return result;
+  });
 
   handleTrusted('app:get-version', () => {
     const { APP_VERSION } = require('./config');
     return APP_VERSION;
   });
 
-  // The renderer can request one of four fixed actions; it cannot provide a
+  // The renderer can request fixed update actions and a boolean preference; it cannot provide a
   // feed URL, channel, executable, path, or updater options. All transition
   // checks and the recording/processing gate live in the main controller.
   const unavailableUpdateState = () => ({
@@ -221,6 +392,7 @@ function registerIpc({
     errorCode: null,
   });
   handleTrusted('updates:get-state', () => updateController?.getState?.() || unavailableUpdateState());
+  handleTrusted('updates:set-automatic', (_event, enabled) => updateController?.setAutomaticUpdates?.(enabled) || unavailableUpdateState());
   handleTrusted('updates:check', () => updateController?.check?.() || unavailableUpdateState());
   handleTrusted('updates:download', () => updateController?.download?.() || unavailableUpdateState());
   handleTrusted('updates:install', () => updateController?.install?.() || unavailableUpdateState());
@@ -247,8 +419,59 @@ function registerIpc({
   handleTrusted('applications:discover', async () => ({
     ok: true, candidates: await applicationRegistry().discover(),
   }));
-  handleTrusted('applications:confirm', (_event, payload) => applicationRegistry().confirm(payload));
-  handleTrusted('applications:remove', (_event, { id } = {}) => applicationRegistry().remove(id));
+  // Round 3, item 2: REPLACING a confirmed entry changes what an approved workflow's id starts,
+  // so it needs a native dialog showing before and after. Creating a new entry, or re-confirming
+  // one unchanged, changes nothing approved and needs none (every run is confirmed anyway, with
+  // the exact program shown). The write is conditional on the entry the person was shown, so an
+  // entry changed while the dialog was open is not overwritten blind.
+  //
+  // Round 4, item 6 (Codex re-check 3, finding 7): remove-then-add used to skip the replacement
+  // dialog. Removing now needs a native dialog, and adding an id that the registry's identity
+  // history remembers (it was removed before) or that a saved workflow already names is treated
+  // as a replacement: before (the remembered entry, or "nothing") and after are shown, with the
+  // workflows that name it. If the saved workflows cannot be read, an add is treated as one that
+  // may rebind them (fail closed).
+  async function workflowsNaming(id) {
+    const listing = await trustedBackend.send('GET', '/workflows', undefined, 5000);
+    const workflows = listing && listing.ok && listing.body && Array.isArray(listing.body.workflows) ? listing.body.workflows : null;
+    if (!workflows) return null;
+    return workflows
+      .filter((wf) => wf && Array.isArray(wf.steps) && wf.steps.some((step) => step && step.app_id === id))
+      .map((wf) => String(wf.name || wf.id || '?'));
+  }
+
+  handleTrusted('applications:confirm', async (_event, payload) => {
+    const registry = applicationRegistry();
+    const proposed = registry.coerce(payload);
+    if (!proposed) return registry.confirm(payload); // its own refusal (invalid id)
+    const existing = registry.get(proposed.id);
+    if (existing && canonicalJson(existing) === canonicalJson(proposed)) return { ok: true, entry: existing };
+    let before = existing;
+    let references = [];
+    if (!existing) {
+      const remembered = registry.history(proposed.id);
+      const naming = await workflowsNaming(proposed.id);
+      references = naming || ['(the saved workflows could not be read)'];
+      if (!remembered && naming && naming.length === 0) return registry.confirm(proposed, { expect: null });
+      before = remembered || null;
+    }
+    const decision = await broker().confirmApplicationReplace({ before, after: proposed, references });
+    if (!decision || decision.approved !== true) {
+      return { ok: false, error: 'declined', message: (decision && decision.error) || 'You cancelled. The application was not changed.' };
+    }
+    return registry.confirm(proposed, { expect: existing || null });
+  });
+  handleTrusted('applications:remove', async (_event, { id } = {}) => {
+    const registry = applicationRegistry();
+    const existing = registry.get(id);
+    if (!existing) return registry.remove(id); // invalid id, or nothing to remove
+    const references = (await workflowsNaming(existing.id)) || [];
+    const decision = await broker().confirmApplicationRemove({ entry: existing, references });
+    if (!decision || decision.approved !== true) {
+      return { ok: false, error: 'declined', message: (decision && decision.error) || 'You cancelled. The application was not removed.' };
+    }
+    return registry.remove(existing.id, { expect: existing });
+  });
 
   // Wave 10 / D-0027: the workflow run executor. This is the ONLY caller of
   // applicationLauncher.js and the only way to reach it is the single channel
@@ -260,14 +483,23 @@ function registerIpc({
   // The controller and the Stream Deck arrive here too, by the same route: their
   // `workflow.run` action reaches the renderer as a request and the renderer
   // calls this channel. There is no second path, and there must not be one.
+  let _applicationLauncher = null;
+  function applicationLauncher() {
+    if (!_applicationLauncher) {
+      const { createApplicationLauncher } = require('./applicationLauncher');
+      _applicationLauncher = createApplicationLauncher({});
+    }
+    return _applicationLauncher;
+  }
+
   let _workflowExecutor = null;
   function workflowExecutor() {
     if (!_workflowExecutor) {
-      const { createApplicationLauncher } = require('./applicationLauncher');
       const { createWorkflowExecutor } = require('./workflowExecutor');
       _workflowExecutor = createWorkflowExecutor({
         backendProxy,
-        launcher: createApplicationLauncher({}),
+        launcher: applicationLauncher(),
+        authorizations: runAuthorizations,
         listApplications: () => applicationRegistry().list(),
         notify: (message) => {
           const { Notification } = require('electron');
@@ -280,18 +512,62 @@ function registerIpc({
     return _workflowExecutor;
   }
 
-  handleTrusted('workflows:execute', (_event, payload) => {
+  // Every run, whoever asks, is confirmed in a native dialog first, and the click yields a
+  // single-use authorization bound to the exact plan and frozen targets (round 3, items 1-2;
+  // approvalBroker.confirmWorkflowRun explains the policy). Anything other than an explicit
+  // confirmed:true with an authorization is a refusal: the executor is never called. The
+  // authorization stays in main; what the page gets back never contains it.
+  async function runWorkflowConfirmed(workflowId) {
+    const confirmation = await broker().confirmWorkflowRun(workflowId);
+    if (!confirmation || confirmation.ok !== true || confirmation.confirmed !== true
+        || typeof confirmation.authorization !== 'string') {
+      const refusal = {
+        ok: false,
+        error: (confirmation && typeof confirmation.error === 'string' && confirmation.error) || 'not_confirmed',
+        reason: (confirmation && typeof confirmation.reason === 'string' && confirmation.reason) || 'That run was not confirmed, so nothing ran.',
+      };
+      if (confirmation && Array.isArray(confirmation.refusals)) refusal.refusals = confirmation.refusals;
+      return refusal;
+    }
+    return workflowExecutor().execute(workflowId, { authorization: confirmation.authorization });
+  }
+
+  handleTrusted('workflows:execute', async (_event, payload) => {
     // Destructured to exactly one field on purpose: passing `payload` through
     // would let a future edit start honouring extra keys without anybody
     // noticing that the channel had stopped being id-only.
     const { workflowId } = payload || {};
-    return workflowExecutor().execute(workflowId);
+    return runWorkflowConfirmed(workflowId);
   });
+
+  // There is no dialog-free run path (round 3, item 1). The old physical-trigger entry, which
+  // ran without a confirmation, is gone; a future hotkey or controller trigger in main must call
+  // runWorkflowConfirmed like the channel above.
+
+  // The send shortcut is gated (round 2, item 2): only a Ctrl/Alt/Meta chord or a function
+  // key is accepted, and changing it from the confirmed value needs a native dialog.
+  // Everything else in the config is applied as before.
+  const { createSendHotkeyGate } = require('./sendHotkeyPolicy');
+  // Held in memory for the session. Persisting a confirmed key would mean a new file under the
+  // app's data folder, which the privacy inventory, the factory reset and the uninstaller would all
+  // have to declare; until that is done a custom chord is simply confirmed once per launch.
+  const sendHotkeyGate = createSendHotkeyGate();
 
   onTrusted('update-hotkeys', (_event, config) => {
     const { registerHotkeys } = require('./hotkeys');
     const token = typeof getAuthToken === 'function' ? getAuthToken() : null;
-    registerHotkeys(config, token);
+    if (!config || typeof config !== 'object') { registerHotkeys(config, token); return; }
+    const verdict = sendHotkeyGate.evaluate(config.manual_send_hotkey);
+    if (verdict.rejected) console.warn('[hotkeys] Refused a send shortcut that is not a Ctrl/Alt/Meta chord or function key.');
+    registerHotkeys({ ...config, manual_send_hotkey: verdict.effective }, token);
+    if (verdict.needsConfirmation) {
+      const wanted = verdict.needsConfirmation;
+      broker().confirmSendHotkeyChange(wanted).then((approved) => {
+        if (!approved) { sendHotkeyGate.decline(wanted); return; }
+        sendHotkeyGate.confirm(wanted);
+        registerHotkeys({ ...config, manual_send_hotkey: wanted }, token);
+      }).catch((error) => console.warn('[hotkeys] send shortcut confirmation failed:', error && error.name));
+    }
   });
 
   handleTrusted('hotkeys:get-capabilities', () => {
@@ -301,17 +577,17 @@ function registerIpc({
 
 
   handleTrusted('shell:open-path', async (_event, targetPath) => {
-    // Open an exported file/folder (e.g. the reel.html preview) in the OS
-    // default app. Only locations the app itself exports to are allowed —
-    // Downloads and the app's own data dir — and the target must exist.
-    if (typeof targetPath !== 'string' || !targetPath || targetPath.length > 4096) {
-      return { ok: false, error: 'No path provided' };
+    // Show an exported folder, or open an exported DOCUMENT (e.g. the reel.html
+    // preview), from locations the app itself writes to. Never an executable,
+    // script, shortcut or installer: shell.openPath launches what it opens, so
+    // openPathPolicy.js allows directories and a closed list of document types
+    // only, judged on the symlink-resolved path.
+    const verdict = evaluateOpenTarget(targetPath);
+    if (!verdict.ok) {
+      console.warn(`[ipc] Refused shell:open-path: ${verdict.reason}`);
+      return { ok: false, error: verdict.reason };
     }
-    if (!isAllowedOpenTarget(targetPath)) {
-      console.warn(`[ipc] Refused shell:open-path outside allowed roots: ${targetPath}`);
-      return { ok: false, error: 'Path is outside the allowed export locations.' };
-    }
-    const error = await shell.openPath(targetPath);
+    const error = await shell.openPath(verdict.resolved);
     return { ok: !error, error: error || null };
   });
 
@@ -388,6 +664,18 @@ function registerIpc({
     if (payload.fallback !== undefined) {
       safePayload.fallback = Boolean(payload.fallback);
     }
+    // Signal Engineer face: read-aloud loudness (0..1 per frame, one chunk per
+    // message) and an expression name chosen by the assistant.
+    if (Array.isArray(payload.envelope)) {
+      safePayload.envelope = payload.envelope
+        .slice(0, 1800)
+        .map((v) => (typeof v === 'number' && isFinite(v) ? Math.max(0, Math.min(1, v)) : 0));
+      const fps = Number(payload.fps);
+      safePayload.fps = fps >= 1 && fps <= 120 ? fps : 30;
+    }
+    if (typeof payload.emotion === 'string' && /^[a-z_]{1,20}$/.test(payload.emotion)) {
+      safePayload.emotion = payload.emotion;
+    }
 
     if (review && !review.isDestroyed() && review.isVisible()) {
       review.webContents.send('review:status', safePayload);
@@ -408,6 +696,38 @@ function registerIpc({
     if (overlayHideTimer) {
       clearTimeout(overlayHideTimer);
       overlayHideTimer = null;
+    }
+
+    // Read-aloud: with a Signal Engineer face selected, the overlay comes up so
+    // the face can talk while the backend plays the audio, and goes back down a
+    // beat after it stops. With the plain ring nothing changes (these statuses
+    // fall through to the idle handling below, exactly as before).
+    const face = getOverlayAppearance().face;
+    const faceOn = Boolean(face && face !== 'ring');
+    // Loudness frames only matter to a visible face; never change visibility.
+    if (status === 'draft_tts_level') {
+      if (faceOn && overlay.isVisible()) overlay.webContents.send('overlay:update', safePayload);
+      return true;
+    }
+    // Assistant talk mode (brain session): the face shows while it listens,
+    // thinks, speaks or waits for a tap.
+    if (faceOn && status.startsWith('talk_')) {
+      if (!overlay.isVisible()) overlay.showInactive();
+      overlay.webContents.send('overlay:update', safePayload);
+      return true;
+    }
+    if ((status === 'draft_tts_started' || status === 'draft_tts_stopped') && faceOn) {
+      if (status === 'draft_tts_started' && !overlay.isVisible()) {
+        overlay.showInactive();
+      }
+      overlay.webContents.send('overlay:update', safePayload);
+      if (status === 'draft_tts_stopped' && !alwaysOn) {
+        overlayHideTimer = setTimeout(() => {
+          if (!overlay.isDestroyed() && overlay.isVisible()) overlay.hide();
+          overlayHideTimer = null;
+        }, 1500);
+      }
+      return true;
     }
 
     if (
@@ -464,6 +784,12 @@ function registerIpc({
     return true;
   });
 
+  onTrusted('review:displayed', (event, payload) => {
+    if (event.senderFrame !== event.sender?.mainFrame) return;
+    const { acknowledgeReviewDraft } = require('./windows');
+    acknowledgeReviewDraft(event.sender, payload);
+  });
+
   handleTrusted('overlay:set-ignore-mouse-events', (_event, ignore) => {
     const { getOverlayWindow } = require('./windows');
     const overlay = getOverlayWindow();
@@ -499,6 +825,8 @@ function registerIpc({
     }
     return applied;
   });
+
+  return { runWorkflowConfirmed };
 }
 
 module.exports = {

@@ -71,6 +71,7 @@ test('acceptance persists across a fresh read', (t) => {
     consent_version: CURRENT_CONSENT_VERSION,
     accepted: true,
     accepted_at: '2026-01-15T12:00:00.000Z',
+    automatic_updates: false,
     completed_steps: [],
   });
 });
@@ -185,7 +186,7 @@ test('an accepted record with a missing consent_version never satisfies a versio
   fs.mkdirSync(root, { recursive: true });
   fs.writeFileSync(
     onboardingFile(root),
-    JSON.stringify({ accepted: true, accepted_at: '2026-01-01T00:00:00.000Z' }),
+    JSON.stringify({ schema_version: SCHEMA_VERSION, accepted: true, accepted_at: '2026-01-01T00:00:00.000Z' }),
   );
   const state = readState({ root });
   assert.equal(state.consent_version, 0);
@@ -210,6 +211,7 @@ test('unknown/extra keys are dropped on normalize', (t) => {
   assert.deepEqual(Object.keys(state).sort(), [
     'accepted',
     'accepted_at',
+    'automatic_updates',
     'completed_steps',
     'consent_version',
     'schema_version',

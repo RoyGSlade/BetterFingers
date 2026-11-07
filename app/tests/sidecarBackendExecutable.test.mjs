@@ -1,7 +1,8 @@
-// resolveBackendExecutable() locates the PyInstaller --onefile artifact
+// resolveBackendExecutable() locates the PyInstaller --onedir artifact
 // build-backend.js produces (see app/scripts/build-backend.js: --name
-// betterfingers-backend). These tests pin two defects found by reading it:
-// the preferred-name hit never checked the executable bit (a +x-stripped
+// betterfingers-backend). The executable is nested inside the bundle so the
+// onedir runtime files travel with it.
+// The preferred-name hit never checked the executable bit (a +x-stripped
 // artifact failed at spawn with a confusing EACCES instead of a clear
 // message), and the fallback scan would happily return the first arbitrary
 // non-dot file (a README, a data file) and spawn it.
@@ -32,7 +33,7 @@ function withResourcesPath(resourcesPath, fn) {
 
 test('resolves the preferred executable name when it is executable', (t) => {
   const resourcesPath = tempResourcesDir(t);
-  const backendDir = path.join(resourcesPath, 'backend');
+  const backendDir = path.join(resourcesPath, 'backend', 'betterfingers-backend');
   fs.mkdirSync(backendDir, { recursive: true });
   const exePath = path.join(backendDir, 'betterfingers-backend');
   fs.writeFileSync(exePath, '#!/bin/sh\necho hi\n', { mode: 0o755 });
@@ -48,7 +49,7 @@ test('throws a precise error when the preferred name exists but is not executabl
     return;
   }
   const resourcesPath = tempResourcesDir(t);
-  const backendDir = path.join(resourcesPath, 'backend');
+  const backendDir = path.join(resourcesPath, 'backend', 'betterfingers-backend');
   fs.mkdirSync(backendDir, { recursive: true });
   const exePath = path.join(backendDir, 'betterfingers-backend');
   fs.writeFileSync(exePath, 'not actually executable', { mode: 0o644 });
@@ -94,6 +95,20 @@ test('fallback scan throws rather than returning a non-executable file when noth
   });
 });
 
+test('resolves the Windows onedir executable at the deterministic nested path', (t) => {
+  const resourcesPath = tempResourcesDir(t);
+  const backendDir = path.join(resourcesPath, 'backend', 'betterfingers-backend');
+  fs.mkdirSync(backendDir, { recursive: true });
+  const exePath = path.join(backendDir, 'betterfingers-backend.exe');
+  // 0o755 so the path lookup is what is tested on every OS: Windows ignores the mode, and on
+  // Linux/macOS the resolver rightly refuses a file without +x (the test above).
+  fs.writeFileSync(exePath, 'windows payload', { mode: 0o755 });
+
+  withResourcesPath(resourcesPath, () => {
+    assert.equal(resolveBackendExecutable(), exePath);
+  });
+});
+
 test('throws naming the exact searched path when the backend directory is missing', (t) => {
   const resourcesPath = tempResourcesDir(t);
 
@@ -107,8 +122,7 @@ test('throws naming the exact searched path when the backend directory is missin
 });
 
 test('the packaged health timeout budget is larger than the dev budget', () => {
-  // A PyInstaller --onefile sidecar self-extracts before Python even starts;
-  // a cold, RAM-constrained, CPU-only packaged boot needs more room than a
-  // dev boot of an already-resident python process.
+  // A cold, RAM-constrained, CPU-only packaged onedir boot needs more room
+  // than a dev boot of an already-resident python process.
   assert.ok(PACKAGED_HEALTH_TIMEOUT_MS > DEV_HEALTH_TIMEOUT_MS);
 });

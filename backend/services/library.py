@@ -114,7 +114,7 @@ class LibraryService:
         if kind == "draft":
             return self._draft_store.get_draft_by_id(identity)
         if kind == "history_entry":
-            return self._fetch_history_record(identity)
+            return self._fetch_history_record(identity) or self._draft_store.get_draft_by_id(identity)
         if kind == "recording":
             for record in self._recordings.list_recordings():
                 if record.get("id") == identity:
@@ -128,7 +128,12 @@ class LibraryService:
             archive_removed = self._history_store.delete_draft(identity)
             return queue_removed or archive_removed
         if kind == "history_entry":
-            return self._history_store.delete_draft(identity)
+            archive_present = self._fetch_history_record(identity) is not None
+            # The live queue mirrors this same archive ID. Remove it before
+            # another ordinary queue save can recreate the deleted entry.
+            queue_removed = self._draft_store.delete_draft(identity, save_fn=self._save_fn)
+            archive_removed = self._history_store.delete_draft(identity)
+            return archive_removed or (queue_removed and not archive_present)
         if kind == "recording":
             return self._recordings.delete_recording(identity)
         return False
@@ -161,10 +166,17 @@ class LibraryService:
             }
 
         if action == "noop_absent":
+            scrub = getattr(self._history_store, "scrub_draft_artifacts", None)
+            if kind in ("draft", "history_entry") and scrub is not None and not scrub(identity):
+                self._audit(action="delete", kind=kind, identity=identity, outcome="write_failed")
+                return {"ok": False, "error": "write_failed", "http_status": 500, "preview": None}
             self._audit(action="delete", kind=kind, identity=identity, outcome="already_absent")
             return {"ok": True, "removed": False, "already_absent": True}
 
-        removed = self._perform_delete(kind, identity)
+        try:
+            removed = self._perform_delete(kind, identity)
+        except OSError:
+            removed = False
         counts = {"char_count": decision["preview"]["char_count"]} if decision["preview"] else None
         if not removed:
             self._audit(action="delete", kind=kind, identity=identity, outcome="write_failed", counts=counts)

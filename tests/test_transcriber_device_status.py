@@ -8,8 +8,15 @@ self.active_compute_type and self.device_fallback_reason must reflect what
 actually loaded, so the /doctor status surface can be honest about it."""
 import unittest
 from unittest.mock import patch
+import pytest
 
-from transcriber import Transcriber
+from backend.stt.transcriber import Transcriber
+
+
+@pytest.fixture(autouse=True)
+def installed_fake_model(monkeypatch):
+    # Device tests use fake constructors and assume an installed speech model.
+    monkeypatch.setattr(Transcriber, "_is_model_cached", lambda self, size: True)
 
 
 class _DummySegment:
@@ -20,23 +27,23 @@ class _DummySegment:
 
 
 class _DummyWhisperModel:
-    def transcribe(self, _audio, beam_size=5, hotwords=None):
-        del beam_size, hotwords
+    def transcribe(self, _audio, beam_size=5, hotwords=None, without_timestamps=False):
+        del beam_size, hotwords, without_timestamps
         return [_DummySegment("hello world", start=0.0, end=0.5)], None
 
 
 def _cuda_fails_cpu_succeeds(*_args, **kwargs):
     """Stand-in for WhisperModel(...): raises for device='cuda' (simulating a
     missing/broken CUDA runtime, e.g. no cuDNN on Windows), succeeds for
-    device='cpu' -- regardless of local_files_only retry branch taken."""
+    device='cpu', with both attempts restricted to local files."""
     if kwargs.get("device") == "cuda":
         raise RuntimeError("Unable to load libcudnn / CUDA driver init failed")
     return _DummyWhisperModel()
 
 
 class TranscriberDeviceStatusDefaultsTests(unittest.TestCase):
-    @patch("transcriber.load_profile", return_value={"model_size": "base.en", "use_gpu": False})
-    @patch("transcriber.WhisperModel", return_value=_DummyWhisperModel())
+    @patch("backend.stt.transcriber.load_profile", return_value={"model_size": "base.en", "use_gpu": False})
+    @patch("backend.stt.transcriber.WhisperModel", return_value=_DummyWhisperModel())
     def test_unloaded_transcriber_has_none_device_state(self, _whisper_model, _load_profile):
         transcriber = Transcriber(profile_name="Default", preload=False)
         self.assertIsNone(transcriber.active_device)
@@ -49,8 +56,8 @@ class TranscriberCudaFallbackTests(unittest.TestCase):
     fallback must be queryable, matching the Windows-no-cuDNN scenario this
     fix targets."""
 
-    @patch("transcriber.load_profile", return_value={"model_size": "base.en", "use_gpu": True})
-    @patch("transcriber.WhisperModel", side_effect=_cuda_fails_cpu_succeeds)
+    @patch("backend.stt.transcriber.load_profile", return_value={"model_size": "base.en", "use_gpu": True})
+    @patch("backend.stt.transcriber.WhisperModel", side_effect=_cuda_fails_cpu_succeeds)
     def test_cuda_failure_records_cpu_device_and_reason(self, whisper_model, _load_profile):
         transcriber = Transcriber(profile_name="Default", preload=False)
         events = []
@@ -68,11 +75,34 @@ class TranscriberCudaFallbackTests(unittest.TestCase):
         self.assertEqual(events[-1]["code"], "cuda_runtime_missing")
         self.assertEqual(events[-1]["state"], "fallback_active")
         self.assertTrue(events[-1]["fallback"])
-        # Every constructor call attempted CUDA before the successful CPU one.
-        whisper_model.assert_called()
+        self.assertEqual([call.kwargs["device"] for call in whisper_model.call_args_list], ["cuda", "cpu"])
+        self.assertTrue(all(call.kwargs["local_files_only"] for call in whisper_model.call_args_list))
 
-    @patch("transcriber.load_profile", return_value={"model_size": "base.en", "use_gpu": True})
-    @patch("transcriber.WhisperModel", return_value=_DummyWhisperModel())
+    @patch("backend.stt.transcriber.load_profile", return_value={"model_size": "base.en", "use_gpu": True})
+    @patch("backend.stt.transcriber.WhisperModel", side_effect=_cuda_fails_cpu_succeeds)
+    def test_cpu_fallback_is_published_as_ready_not_failed(self, _whisper_model, _load_profile):
+        """A working CPU fallback (every NVIDIA machine without cuBLAS/cuDNN)
+        must never surface as a failed lifecycle state, neither mid-load nor
+        when the server attaches its reporter and the fallback is re-emitted."""
+        transcriber = Transcriber(profile_name="Default", preload=False)
+        published = []
+        original = transcriber._publish_runtime_status
+
+        def record(state=None):
+            original(state)
+            published.append(transcriber.get_runtime_status()["state"])
+
+        with patch.object(transcriber, "_publish_runtime_status", side_effect=record):
+            self.assertTrue(transcriber.ensure_loaded())
+            transcriber.set_error_reporter(lambda _event: None)
+
+        self.assertNotIn("failed", published)
+        status = transcriber.get_runtime_status()
+        self.assertEqual(status["state"], "ready")
+        self.assertEqual(status["device_fallback_code"], "cuda_runtime_missing")
+
+    @patch("backend.stt.transcriber.load_profile", return_value={"model_size": "base.en", "use_gpu": True})
+    @patch("backend.stt.transcriber.WhisperModel", return_value=_DummyWhisperModel())
     def test_cuda_success_records_cuda_device_with_no_fallback(self, _whisper_model, _load_profile):
         transcriber = Transcriber(profile_name="Default", preload=False)
 
@@ -83,8 +113,8 @@ class TranscriberCudaFallbackTests(unittest.TestCase):
         self.assertEqual(transcriber.active_compute_type, "float16")
         self.assertIsNone(transcriber.device_fallback_reason)
 
-    @patch("transcriber.load_profile", return_value={"model_size": "base.en", "use_gpu": True})
-    @patch("transcriber.WhisperModel", side_effect=_cuda_fails_cpu_succeeds)
+    @patch("backend.stt.transcriber.load_profile", return_value={"model_size": "base.en", "use_gpu": True})
+    @patch("backend.stt.transcriber.WhisperModel", side_effect=_cuda_fails_cpu_succeeds)
     def test_unload_clears_device_state_after_fallback(self, _whisper_model, _load_profile):
         transcriber = Transcriber(profile_name="Default", preload=False)
         transcriber.ensure_loaded()
@@ -103,8 +133,8 @@ class TranscriberCpuPreferredTests(unittest.TestCase):
     """prefer_gpu False -> CPU is a deliberate choice, not a fallback; no
     fallback reason should ever be set."""
 
-    @patch("transcriber.load_profile", return_value={"model_size": "base.en", "use_gpu": False})
-    @patch("transcriber.WhisperModel", return_value=_DummyWhisperModel())
+    @patch("backend.stt.transcriber.load_profile", return_value={"model_size": "base.en", "use_gpu": False})
+    @patch("backend.stt.transcriber.WhisperModel", return_value=_DummyWhisperModel())
     def test_cpu_preferred_no_fallback_reason(self, whisper_model, _load_profile):
         transcriber = Transcriber(profile_name="Default", preload=False)
         self.assertFalse(transcriber.prefer_gpu)
@@ -127,8 +157,8 @@ class TranscriberReloadProfileTests(unittest.TestCase):
     loaded model; the device status must not keep reporting stale info for a
     model that is no longer loaded."""
 
-    @patch("transcriber.load_profile", return_value={"model_size": "base.en", "use_gpu": True})
-    @patch("transcriber.WhisperModel", side_effect=_cuda_fails_cpu_succeeds)
+    @patch("backend.stt.transcriber.load_profile", return_value={"model_size": "base.en", "use_gpu": True})
+    @patch("backend.stt.transcriber.WhisperModel", side_effect=_cuda_fails_cpu_succeeds)
     def test_reload_profile_with_changed_gpu_pref_clears_stale_device(self, _whisper_model, load_profile):
         transcriber = Transcriber(profile_name="Default", preload=False)
         transcriber.ensure_loaded()

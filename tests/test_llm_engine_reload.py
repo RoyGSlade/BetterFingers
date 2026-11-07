@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
-from llm_engine import LLMEngine
+from backend.llm.llm_engine import LLMEngine
 
 
 class LLMEngineReloadTests(unittest.TestCase):
@@ -77,10 +77,10 @@ class LLMEngineAdmissionTests(unittest.TestCase):
                         "resident": [], "suggested_model_id": "gemma-4-e2b-q4"},
         })
 
-        with patch("llm_engine.os.path.exists", return_value=True), patch(
-            "llm_engine.get_server_path", return_value="/tmp/llama-server"
-        ), patch("llm_engine.get_model_path", return_value="/tmp/gemma-4.gguf"), patch(
-            "llm_engine.subprocess.Popen"
+        with patch("backend.llm.llm_engine.os.path.exists", return_value=True), patch(
+            "backend.llm.llm_engine.get_server_path", return_value="/tmp/llama-server"
+        ), patch("backend.llm.llm_engine.get_model_path", return_value="/tmp/gemma-4.gguf"), patch(
+            "backend.llm.llm_engine.subprocess.Popen"
         ) as popen:
             engine._start_server()
 
@@ -94,10 +94,10 @@ class LLMEngineAdmissionTests(unittest.TestCase):
         process = Mock()
         process.pid = 123
 
-        with patch("llm_engine.os.path.exists", return_value=True), patch(
-            "llm_engine.get_server_path", return_value="/tmp/llama-server"
-        ), patch("llm_engine.get_model_path", return_value="/tmp/gemma-4.gguf"), patch(
-            "llm_engine.subprocess.Popen", return_value=process
+        with patch("backend.llm.llm_engine.os.path.exists", return_value=True), patch(
+            "backend.llm.llm_engine.get_server_path", return_value="/tmp/llama-server"
+        ), patch("backend.llm.llm_engine.get_model_path", return_value="/tmp/gemma-4.gguf"), patch(
+            "backend.llm.llm_engine.subprocess.Popen", return_value=process
         ) as popen, patch.object(engine, "_wait_for_server"):
             engine._start_server()
 
@@ -111,7 +111,7 @@ class LLMEngineAdmissionTests(unittest.TestCase):
         LLMEngine._ready = False
 
         response = Mock(status_code=200)
-        with patch("llm_engine.requests.get", return_value=response):
+        with patch("backend.llm.llm_engine.requests.get", return_value=response):
             engine._wait_for_server()
 
         self.assertEqual(reported, [("gemma-4-e2b-q4", 4157)])
@@ -123,10 +123,10 @@ class LLMEngineAdmissionTests(unittest.TestCase):
         process = Mock()
         process.pid = 123
 
-        with patch("llm_engine.os.path.exists", return_value=True), patch(
-            "llm_engine.get_server_path", return_value="/tmp/llama-server"
-        ), patch("llm_engine.get_model_path", return_value="/tmp/gemma-4.gguf"), patch(
-            "llm_engine.subprocess.Popen", return_value=process
+        with patch("backend.llm.llm_engine.os.path.exists", return_value=True), patch(
+            "backend.llm.llm_engine.get_server_path", return_value="/tmp/llama-server"
+        ), patch("backend.llm.llm_engine.get_model_path", return_value="/tmp/gemma-4.gguf"), patch(
+            "backend.llm.llm_engine.subprocess.Popen", return_value=process
         ) as popen, patch.object(engine, "_wait_for_server"):
             engine._start_server()
 
@@ -139,7 +139,7 @@ class LLMEngineAdmissionTests(unittest.TestCase):
         def _mark_ready():
             LLMEngine._ready = True
 
-        with patch("llm_engine.is_server_running", return_value=False), patch.object(
+        with patch("backend.llm.llm_engine.is_server_running", return_value=False), patch.object(
             engine, "_setup_server", side_effect=_mark_ready
         ) as setup_mock:
             self.assertTrue(engine.ensure_ready())
@@ -162,10 +162,10 @@ class LLMEngineAdmissionTests(unittest.TestCase):
         process = Mock()
         process.pid = 123
 
-        with patch("llm_engine.os.path.exists", return_value=True), patch(
-            "llm_engine.get_server_path", return_value="/tmp/llama-server"
-        ), patch("llm_engine.get_model_path", return_value="/tmp/gemma-4.gguf"), patch(
-            "llm_engine.subprocess.Popen", return_value=process
+        with patch("backend.llm.llm_engine.os.path.exists", return_value=True), patch(
+            "backend.llm.llm_engine.get_server_path", return_value="/tmp/llama-server"
+        ), patch("backend.llm.llm_engine.get_model_path", return_value="/tmp/gemma-4.gguf"), patch(
+            "backend.llm.llm_engine.subprocess.Popen", return_value=process
         ) as popen, patch.object(engine, "_wait_for_server"):
             engine._start_server()
 
@@ -184,7 +184,7 @@ class LLMEngineAdmissionTests(unittest.TestCase):
         LLMEngine._stderr_log.write(b"error while loading shared libraries: libmtmd.so.0")
         LLMEngine._stderr_log.seek(0)
 
-        with patch("llm_engine.requests.get", side_effect=RuntimeError("not listening")), patch.object(
+        with patch("backend.llm.llm_engine.requests.get", side_effect=RuntimeError("not listening")), patch.object(
             engine, "shutdown"
         ) as shutdown_mock:
             engine._wait_for_server()

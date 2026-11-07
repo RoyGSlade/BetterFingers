@@ -54,6 +54,15 @@ test('Utilities exposes the retained-material and runtime destinations', () => {
   assert.match(markup, /Creates a cleaned, review-only draft from selected text[\s\S]*never replaces or sends text automatically/);
 });
 
+test('workspace navigation uses navigation semantics, not an incomplete tablist contract', () => {
+  assert.doesNotMatch(markup, /class="sd-nav__primary"[^>]*role="tablist"/);
+  assert.doesNotMatch(markup, /class="sd-util-nav"[^>]*role="tablist"/);
+  assert.doesNotMatch(markup, /class="sd-set-nav"[^>]*role="tablist"/);
+  assert.match(markup, /class="sd-nav__button is-active"[^>]*aria-current="page"/);
+  assert.match(markup, /class="sd-util-nav__item is-active"[^>]*aria-current="page"/);
+  assert.match(markup, /class="sd-set-nav__item is-active"[^>]*aria-current="page"/);
+});
+
 test('the renamed surface has no orphaned visible Text Playground label', () => {
   assert.doesNotMatch(markup, />Text\s*(?:&amp;\s*Persona\s*)?Playground</i);
   assert.match(markup, /id="textPlaygroundSection"[\s\S]*sd-util-group__title">Scribe</, 'the text playground surface must be labelled Scribe');

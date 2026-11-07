@@ -56,6 +56,7 @@ app/artifacts/
 /.mcp.json
 /AGENTS.md
 /ACCOMPLISH.md
+/.github/FUNDING.yml
 
 # Internal plans and archived execution logs
 /docs/BUILD_WEEK_LOG.md
@@ -71,3 +72,10 @@ app/artifacts/
 /docs/release/RELEASE_BOARD.md
 /docs/release/TRUE_BETTERFINGERS_RELEASE_PLAN.md
 /docs/release/archive/
+/docs/release/evidence/section10-2026-09-06/
+/docs/arc/
+
+# Local-only owner material: campaign assets and design archives
+/marketing/
+/assets/designhelp/
+/assets/_pre_glitchring_backup/

@@ -319,7 +319,8 @@ def test_delete_history_entry_uses_history_store_get_when_available():
     result = service.delete_item("history_entry", 1, confirmed=True)
     assert result["ok"] is True
     assert result["removed"] is True
-    assert hs.get_calls == [1]
+    # Resolve target, then recheck archive presence before removing its queue mirror.
+    assert hs.get_calls == [1, 1]
     assert hs.query_calls == []  # the scanning fallback must not have run
     assert hs.records == []
 

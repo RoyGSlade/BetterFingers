@@ -6,8 +6,8 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-import app_paths
-import platform_capabilities
+from backend.config import app_paths
+from backend.platform import platform_capabilities
 import server
 
 
@@ -102,7 +102,9 @@ class ServerPlatformRuntimeTests(unittest.TestCase):
         self.assertIn("supports_tts", data)
 
     def test_tts_status_preserves_loaded_runtime_model_and_voice_capabilities(self):
-        with patch.object(server, "ensure_tts_initialized", return_value=CapabilityTTS()):
+        with patch.object(server, "tts_engine", CapabilityTTS()), patch.object(
+            server, "ensure_tts_initialized", side_effect=AssertionError("status must not initialize TTS")
+        ):
             with TestClient(server.app) as client:
                 response = client.get("/runtime/tts-status")
 
@@ -239,7 +241,7 @@ class ServerPlatformRuntimeTests(unittest.TestCase):
         self.assertIn("store_warnings", data)
 
     def test_doctor_surfaces_store_degraded_events(self):
-        import store_migration
+        from backend.config import store_migration
 
         store_migration.clear_degraded_events()
         self.addCleanup(store_migration.clear_degraded_events)
@@ -266,7 +268,7 @@ class ServerPlatformRuntimeTests(unittest.TestCase):
         ), patch.object(platform_capabilities, "is_wayland", True
         ), patch.object(platform_capabilities, "is_x11", False), patch.object(
             platform_capabilities, "session_type", "wayland"
-        ), patch("platform_capabilities.shutil.which", return_value=None):
+        ), patch("backend.platform.platform_capabilities.shutil.which", return_value=None):
             with TestClient(server.app) as client:
                 response = client.get("/doctor")
 
@@ -306,7 +308,7 @@ class ServerPlatformRuntimeTests(unittest.TestCase):
         ), patch.object(platform_capabilities, "is_wayland", True
         ), patch.object(platform_capabilities, "is_x11", False), patch.object(
             platform_capabilities, "session_type", "wayland"
-        ), patch("platform_capabilities.shutil.which", return_value=None):
+        ), patch("backend.platform.platform_capabilities.shutil.which", return_value=None):
             with TestClient(server.app) as client:
                 response = client.get("/doctor")
 
@@ -335,7 +337,7 @@ class ServerPlatformRuntimeTests(unittest.TestCase):
         ), patch.object(platform_capabilities, "is_windows", False), patch.object(
             platform_capabilities, "is_wayland", True
         ), patch.object(platform_capabilities, "is_x11", False), patch(
-            "platform_capabilities.shutil.which", side_effect=lambda name: "/usr/bin/wtype" if name == "wtype" else None
+            "backend.platform.platform_capabilities.shutil.which", side_effect=lambda name: "/usr/bin/wtype" if name == "wtype" else None
         ), patch.dict(
             os.environ, {"WAYLAND_DISPLAY": "wayland-0", "DISPLAY": ""}, clear=False
         ):

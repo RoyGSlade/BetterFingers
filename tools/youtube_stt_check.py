@@ -29,7 +29,7 @@ import time
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import wer
+from tools.lib import wer
 
 _TS = re.compile(r"(\d\d):(\d\d):(\d\d)[.,](\d+)\s*-->")
 _TAG = re.compile(r"<[^>]+>")
@@ -92,7 +92,7 @@ def run(url: str, window_s: float, model_name: str, ytdlp: str) -> dict:
         reference = vtt_reference(vtt_path, window_s)
 
         t0 = time.time()
-        model = WhisperModel(model_name, device="cpu", compute_type="int8")
+        model = WhisperModel(model_name, device="cpu", compute_type="int8", local_files_only=True)
         segments, _info = model.transcribe(clip, language="en", beam_size=1)
         hypothesis = " ".join(s.text.strip() for s in segments).strip()
         elapsed = time.time() - t0

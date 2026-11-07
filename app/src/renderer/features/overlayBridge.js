@@ -104,6 +104,15 @@ export function overlayPayloadFor(message) {
   if (typeof message.amplitude === 'number' && Number.isFinite(message.amplitude)) {
     payload.amplitude = message.amplitude;
   }
+  // Read-aloud loudness for the Signal Engineer face (draft_tts_level), and the
+  // brain's chosen expression on talk_* statuses. The main process sanitises both.
+  if (Array.isArray(message.envelope)) {
+    payload.envelope = message.envelope;
+    payload.fps = message.fps;
+  }
+  if (typeof message.emotion === 'string') {
+    payload.emotion = message.emotion;
+  }
 
   return payload;
 }

@@ -14,7 +14,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-import voice_clone_engine as vce
+from backend.tts import voice_clone_engine as vce
 
 
 def _build_runtime_archive(path, python_relpath, extra_members=()):
@@ -40,18 +40,18 @@ def _build_traversal_archive(path):
 
 class PlatformKeyTests(unittest.TestCase):
     def test_linux_x86_64(self):
-        with patch("voice_clone_engine.platform.system", return_value="Linux"), \
-             patch("voice_clone_engine.platform.machine", return_value="x86_64"):
+        with patch("backend.tts.voice_clone_engine.platform.system", return_value="Linux"), \
+             patch("backend.tts.voice_clone_engine.platform.machine", return_value="x86_64"):
             self.assertEqual(vce._clone_runtime_platform_key(), "linux-x86_64")
 
     def test_windows_amd64(self):
-        with patch("voice_clone_engine.platform.system", return_value="Windows"), \
-             patch("voice_clone_engine.platform.machine", return_value="AMD64"):
+        with patch("backend.tts.voice_clone_engine.platform.system", return_value="Windows"), \
+             patch("backend.tts.voice_clone_engine.platform.machine", return_value="AMD64"):
             self.assertEqual(vce._clone_runtime_platform_key(), "windows-x86_64")
 
     def test_unsupported_platform_returns_none(self):
-        with patch("voice_clone_engine.platform.system", return_value="Darwin"), \
-             patch("voice_clone_engine.platform.machine", return_value="arm64"):
+        with patch("backend.tts.voice_clone_engine.platform.system", return_value="Darwin"), \
+             patch("backend.tts.voice_clone_engine.platform.machine", return_value="arm64"):
             self.assertIsNone(vce._clone_runtime_platform_key())
 
 
@@ -61,8 +61,8 @@ class ProvisionedStateTests(unittest.TestCase):
         self.addCleanup(self._tmp.cleanup)
         self.dest_dir = self._tmp.name
         self._patchers = [
-            patch("voice_clone_engine.clone_runtime_dir", return_value=self.dest_dir),
-            patch("voice_clone_engine._clone_runtime_platform_key", return_value="linux-x86_64"),
+            patch("backend.tts.voice_clone_engine.clone_runtime_dir", return_value=self.dest_dir),
+            patch("backend.tts.voice_clone_engine._clone_runtime_platform_key", return_value="linux-x86_64"),
         ]
         for p in self._patchers:
             p.start()
@@ -153,7 +153,7 @@ class ProvisionClientRuntimeTests(unittest.TestCase):
         self.addCleanup(self._tmp.cleanup)
         self.dest_dir = self._tmp.name
         self._patchers = [
-            patch("voice_clone_engine.clone_runtime_dir", return_value=self.dest_dir),
+            patch("backend.tts.voice_clone_engine.clone_runtime_dir", return_value=self.dest_dir),
         ]
         for p in self._patchers:
             p.start()
@@ -170,32 +170,32 @@ class ProvisionClientRuntimeTests(unittest.TestCase):
         }
 
     def test_unsupported_platform_refuses_cleanly(self):
-        with patch("voice_clone_engine._clone_runtime_platform_key", return_value=None):
+        with patch("backend.tts.voice_clone_engine._clone_runtime_platform_key", return_value=None):
             result = vce.provision_clone_runtime()
         self.assertFalse(result["ok"])
         self.assertIn("not supported", result["message"])
 
     def test_unpublished_artifact_refuses_cleanly_without_downloading(self):
-        with patch("voice_clone_engine._clone_runtime_platform_key", return_value="linux-x86_64"), \
-             patch("voice_clone_engine.CLONE_RUNTIME_CATALOG", self._fake_catalog(published=False)), \
-             patch("model_manager.download_file") as download_mock:
+        with patch("backend.tts.voice_clone_engine._clone_runtime_platform_key", return_value="linux-x86_64"), \
+             patch("backend.tts.voice_clone_engine.CLONE_RUNTIME_CATALOG", self._fake_catalog(published=False)), \
+             patch("backend.models.model_manager.download_file") as download_mock:
             result = vce.provision_clone_runtime()
         self.assertFalse(result["ok"])
         self.assertIn("not been published", result["message"])
         download_mock.assert_not_called()
 
     def test_already_provisioned_short_circuits(self):
-        with patch("voice_clone_engine.is_clone_runtime_provisioned", return_value=True), \
-             patch("model_manager.download_file") as download_mock:
+        with patch("backend.tts.voice_clone_engine.is_clone_runtime_provisioned", return_value=True), \
+             patch("backend.models.model_manager.download_file") as download_mock:
             result = vce.provision_clone_runtime()
         self.assertTrue(result["ok"])
         self.assertTrue(result["already_provisioned"])
         download_mock.assert_not_called()
 
     def test_download_failure_surfaces_cleanly(self):
-        with patch("voice_clone_engine._clone_runtime_platform_key", return_value="linux-x86_64"), \
-             patch("voice_clone_engine.CLONE_RUNTIME_CATALOG", self._fake_catalog()), \
-             patch("model_manager.download_file", side_effect=IOError("checksum mismatch")):
+        with patch("backend.tts.voice_clone_engine._clone_runtime_platform_key", return_value="linux-x86_64"), \
+             patch("backend.tts.voice_clone_engine.CLONE_RUNTIME_CATALOG", self._fake_catalog()), \
+             patch("backend.models.model_manager.download_file", side_effect=IOError("checksum mismatch")):
             result = vce.provision_clone_runtime()
         self.assertFalse(result["ok"])
         self.assertIn("Download failed", result["message"])
@@ -209,14 +209,14 @@ class ProvisionClientRuntimeTests(unittest.TestCase):
                 with open(dest_path, "wb") as fh:
                     fh.write(b"fake-wavlm-weights")
 
-        with patch("voice_clone_engine._clone_runtime_platform_key", return_value="linux-x86_64"), \
-             patch("voice_clone_engine.CLONE_RUNTIME_CATALOG", self._fake_catalog()), \
-             patch("voice_clone_engine.CLONE_WAVLM_PIN", {
+        with patch("backend.tts.voice_clone_engine._clone_runtime_platform_key", return_value="linux-x86_64"), \
+             patch("backend.tts.voice_clone_engine.CLONE_RUNTIME_CATALOG", self._fake_catalog()), \
+             patch("backend.tts.voice_clone_engine.CLONE_WAVLM_PIN", {
                  "url": "https://example.invalid/wavlm_base_plus.pth",
                  "sha256": "a" * 64,
                  "cache_relpath": os.path.join("hub", "checkpoints", "wavlm_base_plus.pth"),
              }), \
-             patch("model_manager.download_file", side_effect=fake_download):
+             patch("backend.models.model_manager.download_file", side_effect=fake_download):
             result = vce.provision_clone_runtime()
 
         self.assertTrue(result["ok"])
@@ -232,7 +232,7 @@ class ProvisionClientRuntimeTests(unittest.TestCase):
         # The downloaded archive itself is cleaned up after extraction.
         self.assertFalse(os.path.exists(os.path.join(self.dest_dir, "clone-runtime-linux-x86_64.tar.gz")))
 
-        with patch("voice_clone_engine._clone_runtime_platform_key", return_value="linux-x86_64"):
+        with patch("backend.tts.voice_clone_engine._clone_runtime_platform_key", return_value="linux-x86_64"):
             self.assertTrue(vce.is_clone_runtime_provisioned())
 
     def test_unconfigured_wavlm_pin_refuses_without_marking_ready(self):
@@ -240,10 +240,10 @@ class ProvisionClientRuntimeTests(unittest.TestCase):
             os.makedirs(os.path.dirname(dest_path), exist_ok=True)
             _build_runtime_archive(dest_path, os.path.join("bin", "python3"))
 
-        with patch("voice_clone_engine._clone_runtime_platform_key", return_value="linux-x86_64"), \
-             patch("voice_clone_engine.CLONE_RUNTIME_CATALOG", self._fake_catalog()), \
-             patch("voice_clone_engine.CLONE_WAVLM_PIN", {"url": None, "sha256": None, "cache_relpath": "x"}), \
-             patch("model_manager.download_file", side_effect=fake_download):
+        with patch("backend.tts.voice_clone_engine._clone_runtime_platform_key", return_value="linux-x86_64"), \
+             patch("backend.tts.voice_clone_engine.CLONE_RUNTIME_CATALOG", self._fake_catalog()), \
+             patch("backend.tts.voice_clone_engine.CLONE_WAVLM_PIN", {"url": None, "sha256": None, "cache_relpath": "x"}), \
+             patch("backend.models.model_manager.download_file", side_effect=fake_download):
             result = vce.provision_clone_runtime()
 
         self.assertFalse(result["ok"])
@@ -258,7 +258,7 @@ class AvailabilitySideRuntimeTests(unittest.TestCase):
     simulated here by making the in-process import fail regardless)."""
 
     def test_side_runtime_available_when_provisioned_and_in_process_missing(self):
-        with patch("voice_clone_engine.is_clone_runtime_provisioned", return_value=True):
+        with patch("backend.tts.voice_clone_engine.is_clone_runtime_provisioned", return_value=True):
             import builtins
             real_import = builtins.__import__
 
@@ -282,7 +282,7 @@ class AvailabilitySideRuntimeTests(unittest.TestCase):
             return real_import(name, *args, **kwargs)
 
         with patch.object(builtins, "__import__", side_effect=no_kanade), \
-             patch("voice_clone_engine.is_clone_runtime_provisioned", return_value=False):
+             patch("backend.tts.voice_clone_engine.is_clone_runtime_provisioned", return_value=False):
             status = vce.availability()
         self.assertFalse(status["available"])
         self.assertIsNone(status["mechanism"])
@@ -304,7 +304,7 @@ class AvailabilitySideRuntimeTests(unittest.TestCase):
 
         with patch.object(sys, "frozen", True, create=True), \
              patch.object(builtins, "__import__", side_effect=no_kanade), \
-             patch("voice_clone_engine.is_clone_runtime_provisioned", return_value=False):
+             patch("backend.tts.voice_clone_engine.is_clone_runtime_provisioned", return_value=False):
             status = vce.availability()
         self.assertFalse(status["available"])
 

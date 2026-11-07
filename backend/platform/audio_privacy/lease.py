@@ -56,7 +56,7 @@ from __future__ import annotations
 import logging
 import threading
 
-import audio_schema
+from backend.audio import audio_schema
 
 from backend.platform.audio_privacy.base import detect_guard
 from backend.platform.audio_privacy.journal import PrivacyJournal, new_lease_id

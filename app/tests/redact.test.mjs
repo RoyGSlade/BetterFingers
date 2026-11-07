@@ -148,3 +148,106 @@ test('no unwrapped user-content-shaped console.*() calls in app/src/renderer/mai
     `reasoned ALLOWLIST entry if verified SAFE:\n${offenders.join('\n')}`,
   );
 });
+
+// --- redactSecrets (Phase 0 item 10) ---------------------------------------
+
+const { redactSecrets, createLineRedactor } = require('../src/main/redact.js');
+const SECRET = '9f8e7d6c'.repeat(8);
+
+test('redactSecrets masks bearer tokens, token= parameters, auth frames and key shapes', () => {
+  for (const text of [
+    `Authorization: Bearer ${SECRET}`,
+    `GET /ws/voice_status?token=${SECRET}&x=1 HTTP/1.1`,
+    `auth:${SECRET}`,
+    `BETTERFINGERS_AUTH_TOKEN=${SECRET}`,
+    `leaked ${SECRET} in prose`,
+    'key sk-ant-abcdefgh12345678',
+    'ghp_' + 'y'.repeat(30),
+  ]) {
+    const out = redactSecrets(text);
+    assert.ok(!out.includes(SECRET), text);
+    assert.ok(!out.includes('sk-ant-abcdefgh12345678'), text);
+    assert.ok(!out.includes('y'.repeat(30)), text);
+    assert.ok(out.includes('[redacted]'), text);
+  }
+});
+
+test('redactSecrets leaves ordinary log text alone and is idempotent', () => {
+  for (const text of ['Loaded model base.en in 1.2s', 'token_count=5', 'author=bob', 'GET /runtime/status 200']) {
+    assert.equal(redactSecrets(text), text);
+  }
+  const once = redactSecrets(`Bearer ${SECRET}`);
+  assert.equal(redactSecrets(once), once);
+  assert.equal(redactSecrets(null), '');
+});
+
+// --- Round 2, item 7: the gaps Codex listed ---------------------------------------
+
+test('quoted JSON and repr values are masked', () => {
+  const secrets = [SECRET, 'abc-secret-value-123', 'sk-short', 'hunter2hunter2', 'short-token-value', 's3cr3t-value'];
+  for (const sample of [
+    `{"token": "${SECRET}"}`, `{'access_token': '${SECRET}', 'x': 1}`, `{"Authorization": "Bearer ${SECRET}"}`,
+    "{'Authorization': 'abc-secret-value-123'}", '{"api_key":"sk-short"}', '{ "password" : "hunter2hunter2" }',
+    'payload={"auth_token":"short-token-value"}', '{"client_secret": "s3cr3t-value"}',
+  ]) {
+    const out = redactSecrets(sample);
+    for (const secret of secrets) assert.ok(!out.includes(secret), `${secret} survived in ${out}`);
+    assert.ok(out.includes('[redacted]'), sample);
+  }
+  for (const plain of ['{"name": "Coach", "token_count": 5}', '{"author": "bob"}', '{"keys": ["a", "b"]}']) {
+    assert.equal(redactSecrets(plain), plain);
+  }
+});
+
+test('createLineRedactor masks a secret split across chunk boundaries', () => {
+  const redactor = createLineRedactor();
+  const line = `INFO: GET /x Authorization: Bearer ${SECRET} done\n`;
+  for (const cut of [10, 33, 40, 60, 80]) {
+    const out = [...redactor.push(line.slice(0, cut)), ...redactor.push(line.slice(cut))].join('\n');
+    assert.ok(!out.includes(SECRET), `cut at ${cut}`);
+    assert.ok(!out.includes(SECRET.slice(0, 12)), `a prefix survived at ${cut}`);
+    assert.ok(out.includes('done'), `cut at ${cut}`);
+  }
+});
+
+test('createLineRedactor holds back an unfinished line, flushes it redacted, and caps a runaway line', () => {
+  const redactor = createLineRedactor({ maxPending: 200 });
+  assert.deepEqual(redactor.push('partial line with token=abc'), []);
+  assert.deepEqual(redactor.flush(), ['partial line with token=[redacted]']);
+  assert.deepEqual(redactor.flush(), []);
+  const flood = redactor.push('x'.repeat(500));
+  assert.ok(flood.length >= 1, 'a line that never ends is flushed at the cap');
+  assert.deepEqual(createLineRedactor().push('a\r\nb\n'), ['a', 'b']);
+});
+
+// Round 3, item 5 (Codex re-check 2, finding 5): the overflow flush used to emit the oversized
+// line raw-redacted and RESET, so a credential straddling the 16 KiB boundary lost its prefix
+// ("token=") in the first half and its suffix arrived in the next chunk looking like plain text.
+// Now the oversized line is dropped through its terminating newline and replaced by a marker.
+test('a credential split across the 16 KiB overflow boundary never reaches the output', () => {
+  const credential = 'Zq7Vt2Lm9Rw4Kp8Xc3Nb6Hy1Gd5Fs0Ja'; // synthetic, non-hex, 32 chars
+  for (const offset of [1, 6, 12, 20, 31]) {
+    const redactor = createLineRedactor();
+    // A space before "token=" so the whole line WOULD be caught; the cut lands past the cap.
+    const prefix = `${'x'.repeat(16 * 1024 - 'token='.length - 1)} `;
+    const line = `${prefix}token=${credential} tail\nnext line ok\n`;
+    const cut = prefix.length + 'token='.length + offset; // inside the credential, past the cap
+    const out = [...redactor.push(line.slice(0, cut)), ...redactor.push(line.slice(cut)), ...redactor.flush()];
+    const joined = out.join('\n');
+    assert.ok(!joined.includes(credential.slice(offset)), `credential suffix leaked at offset ${offset}`);
+    assert.ok(out.includes('[line too long, dropped]'), `no drop marker at offset ${offset}`);
+    assert.ok(out.includes('next line ok'), `the following line was lost at offset ${offset}`);
+    assert.ok(!joined.includes(' tail'), `the rest of the dropped line leaked at offset ${offset}`);
+  }
+});
+
+test('an oversized line keeps being discarded across many chunks until its newline', () => {
+  const redactor = createLineRedactor({ maxPending: 64 });
+  const out = [];
+  out.push(...redactor.push('a'.repeat(100)));
+  out.push(...redactor.push('password=hunter2hunter2'));
+  out.push(...redactor.push('b'.repeat(100)));
+  out.push(...redactor.push(' end\nafter\n'));
+  assert.deepEqual(out, ['[line too long, dropped]', 'after']);
+  assert.deepEqual(redactor.flush(), []);
+});

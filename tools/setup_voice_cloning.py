@@ -23,7 +23,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from voice_clone_engine import availability, provision_clone_runtime  # noqa: E402
+from backend.tts.voice_clone_engine import availability, provision_clone_runtime  # noqa: E402
 
 
 def _progress(payload):

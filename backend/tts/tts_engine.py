@@ -1,0 +1,1685 @@
+import collections
+import contextlib
+import hashlib
+import importlib
+import logging
+import os
+import queue
+import re
+import sys
+import threading
+import time
+from typing import Dict, Optional, Tuple, Union
+
+import numpy as np
+import sounddevice as sd
+from backend.runtime.job_manager import JOBS, JobState
+from backend.privacy.log_redaction import redact_user_text
+from backend.runtime.model_runtime_coordinator import RuntimeBusyError
+from backend.config.utils import get_user_data_path
+from backend.tts import voice_clone_engine
+from backend.tts.tts_text import apply_pause_style, normalize_for_speech
+from backend.tts import voice_blend
+from backend.tts import voice_modulation
+
+# Kokoro voice files fetched on first read-aloud from the thewh1teagle/kokoro-onnx
+# GitHub release "model-files-v1.0": (size in bytes, SHA-256 or None). That
+# release publishes no digests, so the SHA-256s are trust-on-first-use from a copy
+# downloaded 2026-08-17 whose sizes match the release API; the quantized variants
+# are pinned by size only. A download that does not match is discarded.
+_KOKORO_ARTIFACT_PINS = {
+    "kokoro-v1.0.onnx": (325532387, "7d5df8ecf7d4b1878015a32686053fd0eebe2bc377234608764cc0ef3636a6c5"),
+    "voices-v1.0.bin": (28214398, "bca610b8308e8d99f32e6fe4197e7ec01679264efed0cac9140fe9c29f1fbf7d"),
+    "kokoro-v1.0.fp16.onnx": (177464787, None),
+    "kokoro-v1.0.int8.onnx": (92361271, None),
+}
+
+
+def kokoro_onnx_dir() -> str:
+    """Where the Kokoro model and voice pack are downloaded:
+    ``<user data root>/tts/kokoro_onnx``.
+
+    These are public model downloads, not the user's cloned voices (those live
+    in ``voices/``). ``backend.privacy.data_paths.downloaded_models`` declares
+    the ``tts`` folder with the other opt-in downloads, and the uninstaller's
+    "Downloaded models and runtimes" box removes it; move this and both lists
+    must move with it (tests/test_privacy_inventory_completeness.py checks the
+    declared location against this function).
+    """
+    return os.path.join(get_user_data_path(), "tts", "kokoro_onnx")
+
+
+# Regex-based pronunciation fixes
+_PRONUNCIATION_MAP = {
+    r"\bSQL\b": "Sequel",
+    r"\bGUI\b": "Gooey",
+    r"\bAPIs?\b": "A P I",
+    r"\bLLM\b": "L L M",
+    r"\bTTS\b": "T T S",
+}
+
+
+def _blend_signature(blend: Optional[dict]) -> tuple:
+    """Deterministic, hashable summary of a blend dict for cache keys."""
+    if not blend:
+        return ()
+    parts = []
+    for k, v in blend.items():
+        try:
+            parts.append((str(k), round(float(v), 4)))
+        except (TypeError, ValueError):
+            parts.append((str(k), 0.0))
+    return tuple(sorted(parts))
+
+
+# Static, conservative resident-MB estimate for admission control. Kokoro's
+# ONNX weights are small (~80-330 MB depending on quantization) but the
+# runtime (onnxruntime session, audio buffers) adds overhead; kept deliberately
+# generous rather than precise per-quantization, matching the SAPI fallback's
+# near-zero footprint being irrelevant to this estimate (SAPI never reaches
+# admission control — see _load_sapi_backend, which has no memory cost worth
+# gating).
+_KOKORO_RUNTIME_MB_ESTIMATE = 450
+
+
+def _modulation_signature(modulation: Optional[dict]) -> tuple:
+    """Deterministic, hashable summary of a modulation dict for cache keys."""
+    if not modulation:
+        return ()
+    keys = ("pitch", "energy", "warmth", "brightness", "pause_style")
+    parts = []
+    for key in keys:
+        value = modulation.get(key)
+        if key == "pause_style":
+            parts.append(str(value or ""))
+        else:
+            try:
+                parts.append(round(float(value), 3) if value is not None else 0.0)
+            except (TypeError, ValueError):
+                parts.append(0.0)
+    return tuple(parts)
+
+
+class ReviewTTSEngine:
+    """
+    Runtime TTS service for review playback.
+
+    Backend selection:
+    1) Kokoro (primary, when supported runtime is available)
+    2) Windows SAPI fallback
+    """
+    DEFAULT_VOICE_HINTS = [
+        "english",
+        "af_heart",
+        "af_bella",
+        "af_nicole",
+        "af_sarah",
+        "am_adam",
+        "am_michael",
+        "am_puck",
+        "bf_emma",
+        "bm_george",
+    ]
+    # Kokoro can truncate very long phoneme streams; keep chunks conservative.
+    MAX_KOKORO_TEXT_CHARS = 220
+
+    def __init__(self):
+        self._lock = threading.RLock()
+        self._status_lock = threading.Lock()
+        self._status_generation = 0
+        self._queue = queue.Queue(maxsize=1)
+        self._worker: Optional[threading.Thread] = None
+        self._worker_running = False
+
+        self.on_start = None
+        self.on_stop = None
+        # Called with backend.tts.loudness.loudness_envelope(...) just before
+        # each audio buffer plays, so the overlay face can lip-sync to it.
+        self.on_audio_level = None
+
+        self._loaded = False
+        self._backend = "none"
+        self._fallback = False
+        self._status_message = "TTS is not loaded."
+
+        self._kokoro_pipeline = None
+        self._kokoro_onnx = None
+        self._kokoro_runtime = None
+        # Only populated after the ONNX artifact is actually loaded. Native
+        # and SAPI runtimes intentionally report no model id rather than
+        # guessing at an ONNX artifact.
+        self._kokoro_model_id = None
+        self._kokoro_voice = "af_heart"
+        self._onnx_providers_used = []
+        self._prefer_gpu = True
+        self._auto_unload_when_idle = False
+        # Idle-unload grace timer: with keep_loaded off, the backend used to be
+        # freed the instant a playback finished, so back-to-back reviews paid a
+        # full Kokoro reload (~0.5-0.8 s) every time. Instead, an idle window is
+        # started after the last utterance; only when it expires with nothing
+        # new queued does the WORKER thread release the models (the timer only
+        # enqueues a sentinel — it never touches the models itself, so it can
+        # never free them under an in-flight utterance).
+        self._idle_unload_timer = None
+        self._audio_cache = collections.OrderedDict()
+        self._cache_max_size = 24
+        self._current_playback = ""
+        # Injected by the server: a zero-arg callable returning a context
+        # manager that holds the TTS runtime read lease (raising
+        # RuntimeBusyError when a destructive op holds the write lease). The
+        # WORKER holds it across generation + clone conversion + playback +
+        # callbacks, so /models/unload/tts cannot free the models under an
+        # in-flight utterance. None (e.g. in unit tests) means "no guard".
+        self._lease_factory = None
+        # Admission-control DI (model_runtime_coordinator), same shape as the
+        # lease factory above. None-safe: unset means "no admission control".
+        self._admission_fn = None      # (estimated_mb, model_id) -> AdmissionResult dict
+        self._load_reporter = None     # (model_id, estimated_mb) -> None
+        # Guards the one-time hot-upgrade attempt in speak() (native -> onnx
+        # when a blend is requested): once a real load attempt has failed
+        # (e.g. kokoro-onnx isn't installed, or the model download failed),
+        # every subsequent blended utterance would otherwise re-probe the
+        # same doomed load. Sticky for this engine's lifetime; a full
+        # unload()/reload cycle is the only reset (matches how _backend
+        # itself only resets on unload).
+        self._onnx_upgrade_failed = False
+        self._publish_status("unloaded")
+
+    def _publish_status(self, state):
+        """Lifecycle-owner publication; never hold status lock for engine work."""
+        from types import MappingProxyType
+
+        capabilities = self._capabilities_locked()
+        capabilities["supported_voice_ids"] = tuple(capabilities["supported_voice_ids"])
+        snapshot = {
+            "loaded": self._loaded,
+            "backend": self._backend,
+            "fallback": self._fallback,
+            "status_message": self._status_message,
+            "state": state,
+            "loading": state == "loading",
+            "capabilities": MappingProxyType(capabilities),
+        }
+        with self._status_lock:
+            self._status_generation += 1
+            snapshot["generation"] = self._status_generation
+            self._status_snapshot = MappingProxyType(snapshot)
+
+    def get_status_snapshot(self):
+        """Observation only: independent of the model/synthesis lock."""
+        with self._status_lock:
+            snapshot = self._status_snapshot
+        result = dict(snapshot)
+        result["capabilities"] = dict(snapshot["capabilities"])
+        result["capabilities"]["supported_voice_ids"] = list(
+            snapshot["capabilities"]["supported_voice_ids"]
+        )
+        return result
+
+    def set_runtime_lease_factory(self, factory):
+        """Install the runtime-lease context-manager factory (see __init__)."""
+        self._lease_factory = factory
+
+    def set_admission_fn(self, fn):
+        self._admission_fn = fn
+
+    def set_load_reporter(self, fn):
+        self._load_reporter = fn
+
+    def is_loaded(self) -> bool:
+        with self._lock:
+            return self._loaded
+
+    def backend(self) -> str:
+        with self._lock:
+            return self._backend
+
+    def _capabilities_locked(self) -> Dict[str, object]:
+        """Same shape as get_capabilities(), for call sites (e.g. speak())
+        that already hold self._lock. self._lock is an RLock so re-entering
+        it would be harmless, but this avoids the pointless double-acquire
+        on the hot path."""
+        return {
+            "backend": self._backend,
+            "runtime": self._kokoro_runtime,
+            "model_id": self._kokoro_model_id if self._kokoro_runtime == "onnx" else None,
+            "supported_voice_ids": (
+                self._safe_onnx_voice_names()
+                if self._kokoro_runtime == "onnx" and self._kokoro_onnx is not None
+                else []
+            ),
+            # Blending only ever runs on kokoro-onnx (see _resolve_voice_spec) —
+            # mirror that exact gate here so this never claims capability the
+            # synthesis path can't actually deliver.
+            "blend_capable": self._kokoro_runtime == "onnx" and self._kokoro_onnx is not None,
+        }
+
+    def _safe_onnx_voice_names(self):
+        try:
+            return self._extract_onnx_voice_names()
+        except Exception:
+            # A partially initialized third-party voice table is not evidence
+            # of supported voices. Keep the capability response honest/open.
+            return []
+
+    def get_capabilities(self) -> Dict[str, object]:
+        """Cheap, thread-safe snapshot of what the currently loaded backend
+        can do. No loading side effects: this is a pure read of engine
+        state, so /runtime/tts-status (or any poller) can call it freely
+        without triggering or blocking on a model load."""
+        with self._lock:
+            return self._capabilities_locked()
+
+    @classmethod
+    def default_voice_hints(cls):
+        return list(cls.DEFAULT_VOICE_HINTS)
+
+    def get_voice_hints(self):
+        hints = list(self.DEFAULT_VOICE_HINTS)
+        with self._lock:
+            onnx_voices = self._extract_onnx_voice_names()
+        for voice in onnx_voices:
+            if voice and voice not in hints:
+                hints.append(voice)
+        return hints
+
+    def set_prefer_gpu(self, prefer_gpu: bool):
+        prefer = bool(prefer_gpu)
+        with self._lock:
+            changed = prefer != self._prefer_gpu
+            self._prefer_gpu = prefer
+            backend = self._backend
+        # Recreate ONNX engine on next use so provider preference is applied.
+        if changed and backend == "kokoro_onnx":
+            self.unload()
+
+    def set_keep_loaded(self, keep_loaded: bool):
+        with self._lock:
+            self._auto_unload_when_idle = not bool(keep_loaded)
+        if keep_loaded:
+            # A pending idle-unload from before the setting flip must not fire.
+            self._cancel_idle_unload_timer()
+
+    _IDLE_UNLOAD_SENTINEL = {"__idle_unload__": True}
+
+    @staticmethod
+    def _idle_unload_delay_sec():
+        """Idle window before auto-unload. 0 restores the old immediate unload."""
+        try:
+            return max(0.0, float(os.getenv("BETTERFINGERS_TTS_IDLE_UNLOAD_SEC", "30") or 30.0))
+        except (TypeError, ValueError):
+            return 30.0
+
+    def _cancel_idle_unload_timer(self):
+        with self._lock:
+            timer, self._idle_unload_timer = self._idle_unload_timer, None
+        if timer is not None:
+            timer.cancel()
+
+    def _schedule_idle_unload(self):
+        delay = self._idle_unload_delay_sec()
+        if delay <= 0:
+            # Preserve the pre-timer behavior: free immediately (we are on the
+            # worker thread here, between utterances).
+            self._release_backend_resources()
+            return
+        with self._lock:
+            if self._idle_unload_timer is not None:
+                self._idle_unload_timer.cancel()
+            # The timer only enqueues a sentinel; the worker thread decides
+            # whether the engine is still idle and does the actual release.
+            timer = threading.Timer(delay, self._queue.put, args=(dict(self._IDLE_UNLOAD_SENTINEL),))
+            timer.daemon = True
+            self._idle_unload_timer = timer
+        timer.start()
+
+    def _release_backend_resources(self, message="TTS auto-unloaded after playback."):
+        self._cancel_idle_unload_timer()
+        with self._lock:
+            self._publish_status("unloading")
+            self._kokoro_pipeline = None
+            self._kokoro_onnx = None
+            self._kokoro_runtime = None
+            self._kokoro_model_id = None
+            self._onnx_providers_used = []
+            self._loaded = False
+            self._backend = "none"
+            self._fallback = False
+            self._status_message = message
+            self._publish_status("unloaded")
+        # The clone models ride along with the TTS backend's lifecycle.
+        try:
+            voice_clone_engine.unload()
+        except Exception as exc:
+            logging.debug(f"voice_clone unload skipped: {exc}")
+
+    def ensure_loaded(self, voice_hint: str = "english") -> Dict[str, object]:
+        with self._lock:
+            if self._loaded:
+                return {
+                    "ok": True,
+                    "backend": self._backend,
+                    "fallback": self._fallback,
+                    "message": self._status_message,
+                }
+
+            quantization = getattr(self, "_kokoro_quantization", "fp32")
+            self._publish_status("loading")
+            kokoro_ok, kokoro_msg = True, ""
+            if self._admission_fn is not None:
+                admission = self._admission_fn(_KOKORO_RUNTIME_MB_ESTIMATE, f"kokoro:{quantization}")
+                if not admission.get("allowed", True):
+                    refusal = admission.get("refusal") or {}
+                    kokoro_ok, kokoro_msg = False, refusal.get(
+                        "message", "Not enough RAM to load the TTS model."
+                    )
+
+            if kokoro_ok:
+                kokoro_ok, kokoro_msg = self._load_kokoro_backend(
+                    voice_hint=voice_hint,
+                    prefer_gpu=self._prefer_gpu,
+                    quantization=quantization,
+                )
+            if kokoro_ok:
+                self._loaded = True
+                self._backend = "kokoro_onnx" if self._kokoro_runtime == "onnx" else "kokoro"
+                self._fallback = False
+                self._status_message = kokoro_msg
+                self._publish_status("ready")
+                if self._load_reporter is not None:
+                    try:
+                        self._load_reporter(f"kokoro:{quantization}", _KOKORO_RUNTIME_MB_ESTIMATE)
+                    except Exception as exc:
+                        logging.debug(f"TTS load reporter failed: {exc}")
+                return {
+                    "ok": True,
+                    "backend": self._backend,
+                    "fallback": self._fallback,
+                    "message": self._status_message,
+                }
+
+            sapi_ok, sapi_msg = self._load_sapi_backend()
+            if sapi_ok:
+                self._loaded = True
+                self._backend = "sapi"
+                self._fallback = True
+                self._status_message = f"{kokoro_msg} Using Windows SAPI fallback."
+                self._publish_status("ready")
+                logging.warning(self._status_message)
+                return {
+                    "ok": True,
+                    "backend": self._backend,
+                    "fallback": self._fallback,
+                    "message": self._status_message,
+                }
+
+            self._loaded = False
+            self._backend = "none"
+            self._fallback = False
+            self._status_message = f"{kokoro_msg} {sapi_msg}".strip()
+            self._publish_status("failed")
+            logging.error(self._status_message)
+            return {
+                "ok": False,
+                "backend": self._backend,
+                "fallback": self._fallback,
+                "message": self._status_message,
+            }
+
+    def _maybe_upgrade_to_onnx_for_blend(self, voice_hint: str) -> None:
+        """One-time attempt to hot-swap from the native Kokoro pipeline onto
+        the ONNX backend when a caller asked for a voice blend.
+
+        Blending only ever runs on kokoro-onnx (_resolve_voice_spec drops it
+        otherwise), so a user on the native runtime who touches a blend
+        slider used to get silence-on-the-feature with zero feedback. Rather
+        than accept that, try loading kokoro-onnx right here, under the
+        engine lock (the caller, speak(), already holds it) so no other
+        thread observes a half-switched backend.
+
+        Must be called only while holding self._lock. No-op unless we're
+        currently on the native runtime: already-ONNX has nothing to
+        upgrade, and non-Kokoro backends (sapi/none) have no native
+        pipeline to upgrade *from* — those just fall through to the
+        blend-dropped warning in speak() untouched.
+        """
+        if self._kokoro_runtime != "native":
+            return
+        if self._onnx_upgrade_failed:
+            # Already tried and failed once this session (e.g. kokoro-onnx
+            # isn't installed, or the model download failed) — retrying on
+            # every single blended utterance would just repeat the same
+            # doomed network/import work forever.
+            return
+
+        self._publish_status("loading")
+        ok, msg = self._load_kokoro_onnx_backend(
+            voice_hint=voice_hint,
+            prefer_gpu=self._prefer_gpu,
+            quantization=getattr(self, "_kokoro_quantization", "fp32"),
+        )
+        if ok:
+            # _load_kokoro_onnx_backend already set _kokoro_pipeline=None,
+            # _kokoro_onnx=<engine>, _kokoro_runtime="onnx" internally; mirror
+            # that into the coarse _backend/_status_message fields so
+            # backend()/get_capabilities() (and /runtime/tts-status) agree
+            # with what will actually run for this and future utterances.
+            self._backend = "kokoro_onnx"
+            self._loaded = True
+            self._fallback = False
+            self._status_message = msg
+            logging.info(
+                "Hot-upgraded TTS backend from native Kokoro to kokoro-onnx to honor a voice blend request: %s",
+                msg,
+            )
+
+        else:
+            # _load_kokoro_onnx_backend's failure path only clears
+            # self._kokoro_onnx; it never touches self._kokoro_pipeline or
+            # self._kokoro_runtime, so the native backend is left exactly as
+            # capable as it was before this attempt — this utterance (and
+            # future non-blend ones) still plays normally, just without the
+            # blend.
+            self._onnx_upgrade_failed = True
+            logging.warning(
+                "Voice blend requested but hot-upgrade to kokoro-onnx failed (%s); "
+                "continuing on the native backend with the blend dropped, and will not retry the upgrade again this session.",
+                msg,
+            )
+        self._publish_status("ready")
+
+    def speak(
+        self,
+        text: str,
+        speed: float = 1.5,
+        voice_hint: str = "english",
+        blend: Optional[dict] = None,
+        modulation: Optional[dict] = None,
+    ) -> Dict[str, object]:
+        phrase = (text or "").strip()
+        if not phrase:
+            return {
+                "ok": False,
+                "backend": "none",
+                "fallback": False,
+                "message": "No text to speak.",
+            }
+
+        # Cloned voices are gated up front: never silently substitute a base
+        # voice for a voice the user believes is theirs. Missing sample or
+        # missing clone engine -> an honest, actionable failure.
+        if voice_clone_engine.is_cloned_voice_id(voice_hint):
+            if voice_clone_engine.find_reference_sample(voice_hint) is None:
+                return {
+                    "ok": False, "backend": "none", "fallback": False,
+                    "error": "cloned_sample_missing",
+                    "message": f"No stored sample found for '{voice_hint}'. Re-clone the voice.",
+                }
+            clone_status = voice_clone_engine.availability()
+            if not clone_status["available"]:
+                return {
+                    "ok": False, "backend": "none", "fallback": False,
+                    "error": "cloning_unavailable",
+                    "message": f"{clone_status['reason']}. {clone_status['setup_hint']}",
+                }
+
+        warnings = []
+        with self._lock:
+            status = self.ensure_loaded(voice_hint=voice_hint)
+            if not status.get("ok", False):
+                return status
+
+            # A blend can only ever be honored on kokoro-onnx (see
+            # _resolve_voice_spec); rather than let a native-backend user
+            # move blend sliders and hear no change with zero feedback, try
+            # once to hot-swap onto ONNX. Non-blend requests never pay for
+            # this — the whole block is skipped when blend is falsy.
+            if blend:
+                self._maybe_upgrade_to_onnx_for_blend(voice_hint=voice_hint)
+                if not self._capabilities_locked()["blend_capable"]:
+                    warnings.append(
+                        "Voice blending requires the ONNX voice engine; the blend was ignored."
+                    )
+
+            self.stop_current()
+            # 1a. Normalize written forms to speech (currency, %, abbreviations…).
+            text = normalize_for_speech(text)
+            # 1b. Apply pronunciation fixes
+            for pattern, replacement in _PRONUNCIATION_MAP.items():
+                text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+            # 1c. Bias punctuation-driven pause length (no-op for "natural").
+            if modulation:
+                text = apply_pause_style(text, modulation.get("pause_style"))
+
+            # 2. Queue for the worker. ALL audio work — cache lookup included —
+            # happens on the worker thread under the runtime read lease, so a
+            # concurrent /models/unload/tts either fails fast (409) or, when
+            # forced, drains this utterance before the models are freed.
+            # Returning here does not mean the text was spoken: the caller gets
+            # a job id it can watch in /jobs.
+            self._clear_queue()
+            self._start_worker_if_needed()
+
+            job = JOBS.create("tts", label=f"Speak {len(text)} chars")
+            payload = {
+                "text": text,
+                "speed": float(speed),
+                "voice_hint": (voice_hint or "english").strip() or "english",
+                "blend": blend or None,
+                "modulation": modulation or None,
+                "job_id": job.id,
+            }
+            try:
+                self._queue.put_nowait(payload)
+            except queue.Full:
+                self._clear_queue()
+                self._queue.put_nowait(payload)
+
+            # Read backend/fallback fresh (not from `status`) so a successful
+            # hot-upgrade above is reflected here — a blended request that
+            # just flipped native -> kokoro_onnx must report the backend it
+            # will actually run on, not the one it loaded with.
+            final_backend = self._backend
+            final_fallback = self._fallback
+
+        result = {
+            "ok": True,
+            "queued": True,
+            "job_id": job.id,
+            "backend": final_backend,
+            "fallback": bool(final_fallback),
+            "message": "Speech queued.",
+        }
+        if warnings:
+            result["warnings"] = warnings
+        return result
+
+    def stop_current(self):
+        # Stop possible Kokoro playback stream
+        try:
+            import sounddevice as sd
+
+            sd.stop()
+        except Exception:
+            pass
+
+        # Purge SAPI queue if active
+        try:
+            comtypes = importlib.import_module("comtypes")
+            comtypes_client = importlib.import_module("comtypes.client")
+            initialized = False
+            if hasattr(comtypes, "CoInitialize"):
+                comtypes.CoInitialize()
+                initialized = True
+            try:
+                voice = comtypes_client.CreateObject("SAPI.SpVoice")
+                # 1 = async, 2 = purge
+                voice.Speak("", 3)
+            finally:
+                if initialized and hasattr(comtypes, "CoUninitialize"):
+                    comtypes.CoUninitialize()
+        except Exception:
+            pass
+
+    def unload(self):
+        self.stop_current()
+        self._stop_worker()
+        self._release_backend_resources(message="TTS unloaded.")
+        self._clear_queue()
+
+    def shutdown(self):
+        self.unload()
+
+    def clear_audio_cache(self) -> bool:
+        """Drop all cached synthesized audio (privacy wipe). Coarse clear-all
+        by design: the cache holds spoken user text, so nothing survives a
+        wipe regardless of cache-key shape."""
+        with self._lock:
+            self._audio_cache.clear()
+            return len(self._audio_cache) == 0
+
+    def is_worker_idle(self) -> bool:
+        """True once the worker thread is gone/dead and has nothing queued.
+        Does not itself stop anything — see drain()."""
+        worker = self._worker
+        return (worker is None or not worker.is_alive()) and self._queue.empty()
+
+    def drain(self, timeout: float = 10.0) -> Dict[str, object]:
+        """Privacy-wipe quiesce: stop playback, drop any queued speech, and
+        join the worker thread so no synthesis/clone-conversion/playback can
+        still be running when the caller proceeds to delete data.
+
+        Returns verified postconditions; the caller must treat either False
+        as "do not delete yet" rather than trusting that this method returned.
+        """
+        self.stop_current()
+        self._clear_queue()
+        self._stop_worker(timeout=timeout)
+        # _stop_worker enqueues a None stop-sentinel; if no worker was alive
+        # to consume it, it would otherwise sit in the queue and make
+        # queue_empty a false negative.
+        self._clear_queue()
+        worker = self._worker
+        return {
+            "worker_idle": (worker is None or not worker.is_alive()),
+            "queue_empty": self._queue.empty(),
+        }
+
+    def _start_worker_if_needed(self):
+        with self._lock:
+            if self._worker and self._worker.is_alive():
+                return
+            self._worker_running = True
+            self._worker = threading.Thread(target=self._worker_loop, daemon=True)
+            self._worker.start()
+
+    def _stop_worker(self, timeout: float = 1.5):
+        with self._lock:
+            self._worker_running = False
+        try:
+            self._queue.put_nowait(None)
+        except Exception:
+            pass
+        worker = self._worker
+        if worker and worker.is_alive():
+            worker.join(timeout=timeout)
+        if worker is None or not worker.is_alive():
+            self._worker = None
+
+    def _clear_queue(self):
+        while True:
+            try:
+                item = self._queue.get_nowait()
+            except queue.Empty:
+                break
+            except Exception:
+                break
+            # A superseded utterance never runs; close out its job honestly.
+            if isinstance(item, dict) and item.get("job_id"):
+                JOBS.cancel(item["job_id"])
+
+    @contextlib.contextmanager
+    def _runtime_guard(self):
+        """Hold the injected runtime read lease for the duration of the block.
+
+        Retries briefly when a writer (unload/reload) holds the lease, but
+        gives up — re-raising RuntimeBusyError — once the worker is being
+        stopped or after ~10s, so a queued utterance is dropped rather than
+        replayed against a runtime the user asked to tear down.
+        """
+        factory = self._lease_factory
+        if factory is None:
+            yield None
+            return
+        deadline = time.monotonic() + 10.0
+        while True:
+            try:
+                with factory() as runtime:
+                    yield runtime
+                return
+            except RuntimeBusyError:
+                if not self._worker_running or time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.1)
+
+    def _worker_loop(self):
+        while self._worker_running:
+            try:
+                item = self._queue.get(timeout=0.2)
+            except queue.Empty:
+                continue
+            if item is None:
+                continue
+
+            if item.get("__idle_unload__"):
+                # Idle window expired with nothing new queued: release on THIS
+                # (worker) thread, same as the old immediate-unload semantics.
+                should_release = False
+                with self._lock:
+                    should_release = self._auto_unload_when_idle and self._queue.empty()
+                if should_release:
+                    self._release_backend_resources()
+                continue
+
+            text = (item.get("text", "") or "").strip()
+            if not text:
+                continue
+
+            # Real work arrived inside the idle window — keep the models warm.
+            self._cancel_idle_unload_timer()
+            job_id = item.get("job_id")
+            try:
+                # The read lease brackets EVERYTHING that touches the models or
+                # the audio device — generation, clone conversion, playback, and
+                # the start/stop callbacks — so an exclusive unload cannot free
+                # them under this utterance (see model_runtime_coordinator).
+                with self._runtime_guard() as runtime:
+                    self._process_speech_item(item, job_id, runtime)
+            except RuntimeBusyError:
+                message = "TTS runtime was reconfigured before playback; speech dropped."
+                logging.warning(message)
+                if job_id:
+                    JOBS.fail(job_id, message)
+            except Exception as exc:
+                logging.error(f"TTS playback failed: {exc}")
+                if job_id:
+                    JOBS.fail(job_id, str(exc))
+            finally:
+                should_schedule = False
+                with self._lock:
+                    should_schedule = self._auto_unload_when_idle and self._queue.empty()
+                if should_schedule:
+                    # Grace window instead of immediate release, so a follow-up
+                    # review does not pay a full backend reload.
+                    self._schedule_idle_unload()
+
+    def _process_speech_item(self, item, job_id, runtime):
+        """Generate and play one queued utterance. Runs on the worker thread,
+        with the runtime read lease already held (``runtime`` is the lease
+        handle, or None when no lease factory is installed)."""
+        text = (item.get("text", "") or "").strip()
+        speed = float(item.get("speed", 1.5))
+        voice_hint = (item.get("voice_hint", "english") or "english").strip() or "english"
+        blend = item.get("blend") or None
+        modulation = item.get("modulation") or None
+
+        def cancel_requested():
+            # A forced unload (write_lease(wait=True)) signals readers to bail;
+            # honoring it here is what lets the unload drain in ~a chunk instead
+            # of timing out behind a long utterance.
+            if runtime is not None and getattr(runtime, "cancel_requested", False):
+                return True
+            if job_id and JOBS.is_cancel_requested(job_id):
+                return True
+            return not self._worker_running
+
+        if cancel_requested():
+            if job_id:
+                JOBS.mark_cancelled(job_id)
+            return
+
+        if job_id:
+            JOBS.transition(job_id, JobState.LOADING)
+
+        backend = self.backend()
+        if backend == "none":
+            recovered = self.ensure_loaded(voice_hint=voice_hint)
+            if not recovered.get("ok", False):
+                message = recovered.get("message", "unknown backend error")
+                logging.error("TTS backend unavailable at playback time: %s", message)
+                if job_id:
+                    JOBS.fail(job_id, str(message))
+                return
+            backend = self.backend()
+
+        # Cache lookup lives here (not in speak()) so cached playback is
+        # covered by the lease and by cooperative cancellation like any
+        # generated audio.
+        cache_key = (text, speed, voice_hint, _blend_signature(blend), _modulation_signature(modulation))
+        cached = None
+        with self._lock:
+            if cache_key in self._audio_cache:
+                cached = self._audio_cache[cache_key]
+                self._audio_cache.move_to_end(cache_key)
+
+        spoke = False
+        if cached is not None and backend in {"kokoro", "kokoro_onnx"}:
+            logging.info("TTS Cache Hit")
+            audio, rate = cached
+            self._current_playback = text
+            self._run_playback_with_callbacks(
+                text, lambda: self._play_with_level(audio, rate, cancel_check=cancel_requested)
+            )
+            spoke = True
+        elif backend in {"kokoro", "kokoro_onnx"}:
+            self._run_playback_with_callbacks(
+                text,
+                lambda: self._speak_kokoro_chunked(
+                    text=text, speed=speed, voice_hint=voice_hint,
+                    blend=blend, modulation=modulation, cancel_check=cancel_requested,
+                ),
+            )
+            spoke = True
+        elif backend == "sapi":
+            self._run_playback_with_callbacks(
+                text, lambda: self._speak_sapi(text=text, speed=speed, voice_hint=voice_hint)
+            )
+            spoke = True
+        else:
+            logging.error("TTS backend unavailable at playback time.")
+            if job_id:
+                JOBS.fail(job_id, "TTS backend unavailable at playback time.")
+            return
+
+        if job_id and spoke:
+            if cancel_requested():
+                JOBS.mark_cancelled(job_id)
+            else:
+                JOBS.complete(job_id)
+
+    def _run_playback_with_callbacks(self, text, playback):
+        if self.on_start:
+            try:
+                self.on_start(text)
+            except Exception as e:
+                logging.warning(f"TTS on_start callback error: {e}")
+        try:
+            playback()
+        finally:
+            if self.on_stop:
+                try:
+                    self.on_stop()
+                except Exception as e:
+                    logging.warning(f"TTS on_stop callback error: {e}")
+
+    def _play_with_level(self, audio, sample_rate, cancel_check=None):
+        """Report this buffer's loudness envelope (if anyone listens), then play it."""
+        if self.on_audio_level:
+            try:
+                from backend.tts.loudness import loudness_envelope
+
+                self.on_audio_level(loudness_envelope(audio, sample_rate))
+            except Exception as e:
+                logging.warning(f"TTS on_audio_level callback error: {e}")
+        self._play_audio(audio, sample_rate, cancel_check=cancel_check)
+
+    @staticmethod
+    def _play_audio(audio, sample_rate, cancel_check=None):
+        """Play one audio buffer. Without a cancel_check this is a plain
+        blocking play; with one, playback is polled so a cancellation (forced
+        unload, job cancel, worker stop) interrupts within ~50ms."""
+        import sounddevice as sd
+
+        if cancel_check is None:
+            sd.play(audio, samplerate=sample_rate, blocking=True)
+            return
+        sd.play(audio, samplerate=sample_rate)
+        # Duration-bounded poll: never trusts stream introspection alone, so a
+        # backend whose stream object misbehaves cannot wedge the worker.
+        deadline = time.monotonic() + (len(audio) / float(sample_rate)) + 0.5
+        while time.monotonic() < deadline:
+            if cancel_check():
+                try:
+                    sd.stop()
+                except Exception:
+                    pass
+                return
+            try:
+                stream = sd.get_stream()
+                if stream is None or not stream.active:
+                    return
+            except Exception:
+                pass
+            time.sleep(0.05)
+
+    def _load_kokoro_backend(
+        self,
+        voice_hint: str = "english",
+        prefer_gpu: bool = True,
+        quantization: str = "fp32",
+    ) -> Tuple[bool, str]:
+        onnx_ok, onnx_msg = self._load_kokoro_onnx_backend(
+            voice_hint=voice_hint,
+            prefer_gpu=prefer_gpu,
+            quantization=quantization,
+        )
+        if onnx_ok:
+            return True, onnx_msg
+
+        native_msg = ""
+        try:
+            kokoro = importlib.import_module("kokoro")
+        except BaseException as exc:
+            if isinstance(exc, ModuleNotFoundError):
+                if sys.version_info >= (3, 13):
+                    native_msg = (
+                        "Kokoro unavailable on this runtime: Python 3.13 environment detected."
+                    )
+                else:
+                    native_msg = "Kokoro unavailable (module not installed; run `pip install kokoro`)."
+            else:
+                native_msg = f"Kokoro unavailable ({exc})."
+        else:
+            pipeline_cls = getattr(kokoro, "KPipeline", None)
+            if pipeline_cls is None:
+                native_msg = "Kokoro runtime found but KPipeline is unavailable."
+            else:
+                try:
+                    try:
+                        pipeline = pipeline_cls(lang_code="a")
+                    except TypeError:
+                        pipeline = pipeline_cls("a")
+                    self._kokoro_pipeline = pipeline
+                    self._kokoro_onnx = None
+                    self._kokoro_runtime = "native"
+                    self._kokoro_model_id = None
+                    self._kokoro_voice = self._resolve_kokoro_voice(voice_hint)
+                    return True, "Kokoro backend loaded."
+                except BaseException as exc:
+                    self._kokoro_pipeline = None
+                    native_msg = f"Kokoro load failed ({exc})."
+
+        if native_msg:
+            return False, f"{native_msg} {onnx_msg}".strip()
+        return False, onnx_msg
+
+    def _load_kokoro_onnx_backend(
+        self,
+        voice_hint: str = "english",
+        prefer_gpu: bool = True,
+        quantization: str = "fp32",
+    ) -> Tuple[bool, str]:
+        try:
+            kokoro_onnx = importlib.import_module("kokoro_onnx")
+        except Exception as exc:
+            return False, f"kokoro-onnx unavailable ({exc})."
+
+        kokoro_cls = getattr(kokoro_onnx, "Kokoro", None)
+        if kokoro_cls is None:
+            return False, "kokoro-onnx runtime found but Kokoro class is unavailable."
+
+        quant_norm = (quantization or "fp32").lower()
+        if quant_norm == "fp16" or quant_norm == "16":
+            model_filename = "kokoro-v1.0.fp16.onnx"
+        elif quant_norm == "int8" or quant_norm == "8":
+            model_filename = "kokoro-v1.0.int8.onnx"
+        else:
+            model_filename = "kokoro-v1.0.onnx"
+
+        base_dir = kokoro_onnx_dir()
+        os.makedirs(base_dir, exist_ok=True)
+        model_path = os.path.join(base_dir, model_filename)
+        voices_path = os.path.join(base_dir, "voices-v1.0.bin")
+
+        model_url = (
+            "https://github.com/thewh1teagle/kokoro-onnx/releases/download/"
+            f"model-files-v1.0/{model_filename}"
+        )
+        voices_url = (
+            "https://github.com/thewh1teagle/kokoro-onnx/releases/download/"
+            "model-files-v1.0/voices-v1.0.bin"
+        )
+
+        ok_model, model_msg = self._ensure_artifact(model_path, model_url, "kokoro-onnx model")
+        if not ok_model:
+            return False, model_msg
+        ok_voices, voices_msg = self._ensure_artifact(voices_path, voices_url, "kokoro-onnx voices")
+        if not ok_voices:
+            return False, voices_msg
+
+        providers, provider_note = self._resolve_onnx_providers(prefer_gpu=prefer_gpu)
+
+        engine = None
+        errors = []
+        candidate_kwargs = []
+        if providers:
+            candidate_kwargs.append(
+                {"model_path": model_path, "voices_path": voices_path, "providers": providers}
+            )
+        candidate_kwargs.append({"model_path": model_path, "voices_path": voices_path})
+
+        for kwargs in candidate_kwargs:
+            try:
+                engine = kokoro_cls(**kwargs)
+                break
+            except Exception as exc:
+                errors.append(str(exc))
+
+        if engine is None:
+            self._kokoro_onnx = None
+            joined = "; ".join(errors[-2:]) if errors else "unknown error"
+            return False, f"kokoro-onnx load failed ({joined})."
+
+        try:
+            self._kokoro_pipeline = None
+            self._kokoro_onnx = engine
+            self._kokoro_runtime = "onnx"
+            self._kokoro_model_id = model_filename
+            self._kokoro_voice = self._resolve_kokoro_voice(voice_hint)
+            self._onnx_providers_used = self._extract_onnx_providers(engine, fallback=providers)
+            providers_text = ", ".join(self._onnx_providers_used) if self._onnx_providers_used else "default"
+            msg = f"kokoro-onnx backend loaded ({providers_text}). {provider_note} {model_msg} {voices_msg}".strip()
+            return True, msg
+        except Exception as exc:
+            self._kokoro_onnx = None
+            self._kokoro_model_id = None
+            self._onnx_providers_used = []
+            return False, f"kokoro-onnx load failed ({exc})."
+
+    @staticmethod
+    def _resolve_onnx_providers(prefer_gpu: bool = True):
+        providers = ["CPUExecutionProvider"]
+        if not prefer_gpu:
+            return providers, "TTS GPU disabled in settings."
+
+        try:
+            onnxruntime = importlib.import_module("onnxruntime")
+            available = set(onnxruntime.get_available_providers() or [])
+            if "CUDAExecutionProvider" in available:
+                return ["CUDAExecutionProvider", "CPUExecutionProvider"], "Using CUDA provider for TTS."
+            return providers, "CUDA provider unavailable, using CPU provider for TTS."
+        except Exception as exc:
+            return providers, f"Could not probe ONNX providers ({exc}); using CPU provider."
+
+    @staticmethod
+    def _extract_onnx_providers(engine, fallback=None):
+        fallback = list(fallback or [])
+        for attr in ("session", "sess", "_session"):
+            session = getattr(engine, attr, None)
+            if session is not None and hasattr(session, "get_providers"):
+                try:
+                    providers = session.get_providers() or []
+                    return [str(p) for p in providers]
+                except Exception:
+                    break
+        return [str(p) for p in fallback]
+
+    @staticmethod
+    def _ensure_artifact(path: str, url: str, label: str) -> Tuple[bool, str]:
+        expected_size, expected_sha256 = _KOKORO_ARTIFACT_PINS.get(os.path.basename(path), (None, None))
+        if os.path.exists(path) and os.path.getsize(path) > 0:
+            # A truncated or replaced file is re-fetched instead of handed to
+            # onnxruntime. Existing files are size-checked only: hashing 300 MB on
+            # every engine load would cost about a second.
+            if expected_size is None or os.path.getsize(path) == expected_size:
+                return True, f"{label} ready."
+
+        tmp_path = f"{path}.part"
+        try:
+            requests = importlib.import_module("requests")
+            digest = hashlib.sha256()
+            written = 0
+            with requests.get(url, stream=True, timeout=60) as response:
+                response.raise_for_status()
+                with open(tmp_path, "wb") as handle:
+                    for chunk in response.iter_content(chunk_size=1024 * 1024):
+                        if chunk:
+                            handle.write(chunk)
+                            digest.update(chunk)
+                            written += len(chunk)
+            if expected_size is not None and written != expected_size:
+                raise ValueError(f"size {written} != pinned {expected_size}")
+            if expected_sha256 is not None and digest.hexdigest() != expected_sha256:
+                raise ValueError("SHA-256 does not match the pinned value")
+            os.replace(tmp_path, path)
+            return True, f"{label} downloaded."
+        except Exception as exc:
+            try:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+            except Exception:
+                pass
+            return False, f"{label} download failed ({exc})."
+
+    @staticmethod
+    def _load_sapi_backend() -> Tuple[bool, str]:
+        try:
+            comtypes = importlib.import_module("comtypes")
+            comtypes_client = importlib.import_module("comtypes.client")
+            initialized = False
+            if hasattr(comtypes, "CoInitialize"):
+                comtypes.CoInitialize()
+                initialized = True
+            try:
+                # Probe object creation once so fallback status is definitive.
+                _ = comtypes_client.CreateObject("SAPI.SpVoice")
+            finally:
+                if initialized and hasattr(comtypes, "CoUninitialize"):
+                    comtypes.CoUninitialize()
+            return True, "Windows SAPI backend loaded."
+        except Exception as exc:
+            return False, f"Windows SAPI unavailable ({exc})."
+
+    @staticmethod
+    def _resolve_kokoro_voice(voice_hint: str) -> str:
+        hint = (voice_hint or "").strip().lower()
+        if not hint:
+            return "af_heart"
+
+        # Accept direct voice IDs first.
+        if "_" in hint:
+            return hint
+
+        aliases = {
+            "english": "af_heart",
+            "female": "af_heart",
+            "woman": "af_heart",
+            "male": "am_puck",
+            "man": "am_puck",
+            "british": "bf_emma",
+            "brit": "bf_emma",
+            "uk": "bf_emma",
+        }
+        for key, voice in aliases.items():
+            if key in hint:
+                return voice
+        return "af_heart"
+
+    def _resolve_voice_spec(self, base: str, blend: Optional[dict]) -> Union[str, np.ndarray]:
+        """Resolve a base voice hint + optional blend dict into either a
+        plain (alias-resolved) voice-id string, or a blended style tensor
+        ready to hand straight to kokoro-onnx's `create(voice=...)`.
+
+        Never raises: unknown blend voices are dropped (logged) and blending
+        falls back to the base voice alone when the ONNX voices table isn't
+        available (e.g. the native/SAPI backends don't support raw tensor
+        voices) — logged at warning level (not returned as an error) since
+        speak() is the one that surfaces this honestly to the caller, via
+        the "warnings" entry in its returned status dict, after first trying
+        a hot-upgrade onto the ONNX backend (see
+        _maybe_upgrade_to_onnx_for_blend).
+        """
+        base_voice = self._resolve_kokoro_voice(base)
+        blend = blend or {}
+        if not blend:
+            return base_voice
+
+        if self._kokoro_runtime != "onnx" or self._kokoro_onnx is None:
+            # Was logging.info: a dropped blend is a user-visible feature
+            # gap (they moved sliders, heard no change), not routine chatter
+            # — surface it at warning level so it shows up without deliberately
+            # cranking log verbosity. speak() also mirrors this into the
+            # returned status dict's "warnings" list; this log line remains
+            # for callers that bypass speak() and invoke resolution directly.
+            logging.warning(
+                "Voice blending requested but only supported on the ONNX backend; using base voice %r.",
+                base_voice,
+            )
+            return base_voice
+
+        names = [base_voice]
+        weights = [1.0]
+        for name, weight in blend.items():
+            resolved = self._resolve_kokoro_voice(name)
+            if not self._onnx_voice_exists(resolved):
+                logging.warning("Unknown blend voice %r (resolved %r); skipping.", name, resolved)
+                continue
+            try:
+                w = float(weight)
+            except (TypeError, ValueError):
+                continue
+            if w <= 0:
+                continue
+            names.append(resolved)
+            weights.append(w)
+
+        if len(names) < 2:
+            return base_voice
+
+        if not self._onnx_voice_exists(base_voice):
+            logging.warning("Base voice %r not found for blending; using first available voice.", base_voice)
+            return self._first_onnx_voice() or base_voice
+
+        try:
+            tensors = [self._kokoro_onnx.voices[name] for name in names]
+            blended = voice_blend.blend_many(tensors, weights=weights)
+        except Exception as exc:
+            logging.warning("Voice blend failed (%s); using base voice %r.", exc, base_voice)
+            return base_voice
+        return blended
+
+    def _speak_kokoro(
+        self,
+        text: str,
+        speed: float,
+        voice_hint: str,
+        voice_spec: Optional[Union[str, np.ndarray]] = None,
+        modulation: Optional[dict] = None,
+        cancel_check=None,
+    ):
+        try:
+            import sounddevice as sd
+        except Exception as exc:
+            raise RuntimeError(f"sounddevice unavailable for Kokoro playback ({exc}).")
+
+        audio_tuple = self._generate_kokoro_audio(
+            text, speed, voice_hint, voice_spec=voice_spec, modulation=modulation,
+        )
+        if audio_tuple is None:
+            raise RuntimeError("Kokoro generated no audio frames.")
+        merged, sample_rate = audio_tuple
+        sd.stop()
+        self._play_with_level(merged, sample_rate, cancel_check=cancel_check)
+
+    def _onnx_voice_exists(self, voice: str) -> bool:
+        voices = getattr(self._kokoro_onnx, "voices", None)
+        if voices is None:
+            return False
+        if hasattr(voices, "files"):
+            return voice in list(getattr(voices, "files"))
+        if hasattr(voices, "keys"):
+            try:
+                return voice in voices.keys()
+            except Exception:
+                return False
+        try:
+            return voice in voices
+        except Exception:
+            return False
+
+    def _first_onnx_voice(self) -> Optional[str]:
+        voices = getattr(self._kokoro_onnx, "voices", None)
+        if voices is None:
+            return None
+        if hasattr(voices, "files"):
+            files = list(getattr(voices, "files"))
+            return files[0] if files else None
+        if hasattr(voices, "keys"):
+            try:
+                keys = list(voices.keys())
+                return keys[0] if keys else None
+            except Exception:
+                return None
+        return None
+
+    def _extract_onnx_voice_names(self):
+        voices = getattr(self._kokoro_onnx, "voices", None)
+        if voices is None:
+            return []
+        if hasattr(voices, "files"):
+            return [str(v).strip().lower() for v in list(getattr(voices, "files")) if str(v).strip()]
+        if hasattr(voices, "keys"):
+            try:
+                return [str(v).strip().lower() for v in list(voices.keys()) if str(v).strip()]
+            except Exception:
+                return []
+        return []
+
+    @staticmethod
+    def _sapi_rate_from_speed(speed: float) -> int:
+        # 1.0x ~= 0, 1.5x ~= +4, 2.0x ~= +8
+        value = int(round((float(speed) - 1.0) * 8.0))
+        return max(-10, min(10, value))
+
+    def _speak_sapi(self, text: str, speed: float, voice_hint: str):
+        comtypes = importlib.import_module("comtypes")
+        comtypes_client = importlib.import_module("comtypes.client")
+        initialized = False
+        if hasattr(comtypes, "CoInitialize"):
+            comtypes.CoInitialize()
+            initialized = True
+        try:
+            voice = comtypes_client.CreateObject("SAPI.SpVoice")
+            voice.Rate = self._sapi_rate_from_speed(speed)
+
+            hint = (voice_hint or "").strip().lower()
+            if hint:
+                try:
+                    voices = voice.GetVoices()
+                    for idx in range(int(voices.Count)):
+                        token = voices.Item(idx)
+                        desc = str(token.GetDescription() or "").lower()
+                        if hint in desc:
+                            voice.Voice = token
+                            break
+                except Exception:
+                    pass
+
+            voice.Speak(text, 0)
+        finally:
+            if initialized and hasattr(comtypes, "CoUninitialize"):
+                comtypes.CoUninitialize()
+
+    @staticmethod
+    def _split_words_to_max_chars(text: str, max_chars: int):
+        if not text:
+            return []
+        max_chars = max(32, int(max_chars))
+        words = [token for token in text.split() if token]
+        if not words:
+            return []
+
+        chunks = []
+        current = words[0]
+        for word in words[1:]:
+            candidate = f"{current} {word}"
+            if len(candidate) <= max_chars:
+                current = candidate
+                continue
+            chunks.append(current)
+            current = word
+        if current:
+            chunks.append(current)
+
+        # Guard for single very long tokens without spaces.
+        final_chunks = []
+        for chunk in chunks:
+            if len(chunk) <= max_chars:
+                final_chunks.append(chunk)
+                continue
+            start = 0
+            while start < len(chunk):
+                final_chunks.append(chunk[start : start + max_chars])
+                start += max_chars
+        return final_chunks
+
+    @classmethod
+    def _split_text_for_tts(cls, text: str, max_chars: int = None):
+        phrase = re.sub(r"\s+", " ", (text or "")).strip()
+        if not phrase:
+            return []
+
+        safe_max = max(32, int(max_chars or cls.MAX_KOKORO_TEXT_CHARS))
+        if len(phrase) <= safe_max:
+            return [phrase]
+
+        chunks = []
+        current = ""
+
+        def append_piece(piece: str):
+            nonlocal current
+            piece = piece.strip()
+            if not piece:
+                return
+            if not current:
+                if len(piece) <= safe_max:
+                    current = piece
+                    return
+                for split_piece in cls._split_words_to_max_chars(piece, safe_max):
+                    if split_piece:
+                        chunks.append(split_piece)
+                return
+
+            merged = f"{current} {piece}"
+            if len(merged) <= safe_max:
+                current = merged
+                return
+
+            chunks.append(current)
+            current = ""
+            append_piece(piece)
+
+        sentence_like = [part.strip() for part in re.split(r"(?<=[.!?])\s+", phrase) if part.strip()]
+        if not sentence_like:
+            sentence_like = [phrase]
+
+        for sentence in sentence_like:
+            if len(sentence) <= safe_max:
+                append_piece(sentence)
+                continue
+            clauses = [part.strip() for part in re.split(r"(?<=[,;:])\s+", sentence) if part.strip()]
+            if not clauses:
+                clauses = [sentence]
+            for clause in clauses:
+                if len(clause) <= safe_max:
+                    append_piece(clause)
+                    continue
+                for split_piece in cls._split_words_to_max_chars(clause, safe_max):
+                    append_piece(split_piece)
+
+        if current:
+            chunks.append(current)
+        return chunks or [phrase]
+
+    def render_prepared_chunks(self, chunks: list, export_dir: str) -> list:
+        """
+        Render audio for each chunk and save to export_dir.
+        chunks: [{"text": "...", "voice": "...", "speed": 0.95}, ...]
+        Returns list of generated file paths.
+        """
+        import os
+        import soundfile as sf
+        
+        os.makedirs(export_dir, exist_ok=True)
+        saved_files = []
+        
+        for idx, chunk in enumerate(chunks):
+            text = chunk.get("text", "")
+            voice = chunk.get("voice", "af_heart")
+            speed = float(chunk.get("speed", 0.95))
+            
+            if not text:
+                continue
+                
+            try:
+                audio_tuple = self._generate_kokoro_audio(text, speed, voice)
+                if audio_tuple:
+                    audio_data, sample_rate = audio_tuple
+                    filename = f"chunk_{idx+1:04d}.wav"
+                    filepath = os.path.join(export_dir, filename)
+                    sf.write(filepath, audio_data, sample_rate)
+                    saved_files.append(filepath)
+            except Exception as exc:
+                logging.error(f"Failed to render chunk {idx}: {exc}")
+                
+        return saved_files
+
+    def _speak_kokoro_chunked(
+        self,
+        text: str,
+        speed: float,
+        voice_hint: str,
+        blend: Optional[dict] = None,
+        modulation: Optional[dict] = None,
+        cancel_check=None,
+    ):
+        """Speak text with concurrent generation and playback to avoid pauses between chunks.
+
+        ``cancel_check``, when given, is polled between chunks (and inside each
+        chunk's playback) so a forced runtime unload or job cancel interrupts a
+        long utterance promptly instead of playing it to the end.
+        """
+        chunks = self._split_text_for_tts(text=text, max_chars=self.MAX_KOKORO_TEXT_CHARS)
+
+        if not chunks:
+            return
+
+        def cancelled():
+            return bool(cancel_check and cancel_check())
+
+        # Resolve once (base + blend don't vary per chunk) and reuse for every chunk.
+        voice_spec = self._resolve_voice_spec(voice_hint, blend)
+
+        if len(chunks) == 1:
+            # Single chunk - no need for concurrent processing
+            self._speak_kokoro(
+                text=chunks[0], speed=speed, voice_hint=voice_hint,
+                voice_spec=voice_spec, modulation=modulation, cancel_check=cancel_check,
+            )
+            return
+
+        logging.debug("Chunking TTS input into %d segments for Kokoro playback.", len(chunks))
+
+        try:
+            import sounddevice as sd
+        except Exception as exc:
+            raise RuntimeError(f"sounddevice unavailable for Kokoro playback ({exc}).")
+
+        # Use a queue to hold pre-generated audio chunks
+        audio_queue = queue.Queue(maxsize=3)  # Buffer up to 3 chunks ahead
+        generation_done = threading.Event()
+        generation_error = [None]  # Use list to allow mutation in nested function
+
+        full_audio_buffer = []  # For caching
+
+
+        def generate_audio_chunks():
+            """Background thread that generates audio chunks ahead of playback."""
+            try:
+                for chunk_text in chunks:
+                    # Allow direct/manual invocations of _speak_kokoro_chunked outside worker loop.
+                    if self._worker is not None and not self._worker_running:
+                        break
+                    if cancelled():
+                        break
+                    audio_data = self._generate_kokoro_audio(
+                        chunk_text, speed, voice_hint, voice_spec=voice_spec, modulation=modulation,
+                    )
+                    if audio_data is not None:
+                        audio_queue.put(audio_data, timeout=30)
+            except Exception as e:
+                generation_error[0] = e
+                logging.error(f"TTS generation error: {e}")
+            finally:
+                generation_done.set()
+
+        # Start generation thread
+        gen_thread = threading.Thread(target=generate_audio_chunks, daemon=True)
+        gen_thread.start()
+
+        # Play audio as it becomes available
+        first_chunk = True
+        was_cancelled = False
+        while True:
+            if cancelled():
+                was_cancelled = True
+                break
+            try:
+                # Wait for audio with timeout
+                audio_data, sample_rate = audio_queue.get(timeout=0.1)
+
+                if len(text) < 100:
+                    full_audio_buffer.append(audio_data)
+
+                if first_chunk:
+                    sd.stop()
+                    first_chunk = False
+
+                # Play this chunk (blocking, but interruptible via cancel_check)
+                self._play_with_level(audio_data, sample_rate, cancel_check=cancel_check)
+
+            except queue.Empty:
+                # Check if generation is done
+                if generation_done.is_set():
+                    # Drain any remaining items
+                    while not cancelled():
+                        try:
+                            audio_data, sample_rate = audio_queue.get_nowait()
+                            if len(text) < 100:
+                                full_audio_buffer.append(audio_data)
+                            self._play_with_level(audio_data, sample_rate, cancel_check=cancel_check)
+                        except queue.Empty:
+                            break
+                    break
+                # Otherwise, wait a bit more for generation
+                continue
+
+        if was_cancelled:
+            try:
+                sd.stop()
+            except Exception:
+                pass
+            # Unblock the generator if it's parked on a full audio_queue.
+            self._drain_local_queue(audio_queue)
+        gen_thread.join(timeout=1.0)
+
+        # Cache the result if we captured everything and it was short enough
+        if full_audio_buffer and len(text) < 100 and not generation_error[0] and not was_cancelled:
+            try:
+                final_audio = np.concatenate(full_audio_buffer)
+                if len(self._audio_cache) >= self._cache_max_size:
+                    self._audio_cache.popitem(last=False)
+                # Store with the same key used by the worker's cache lookup
+                cache_key = (text, speed, voice_hint, _blend_signature(blend), _modulation_signature(modulation))
+                self._audio_cache[cache_key] = (final_audio, sample_rate)
+                logging.debug("Cached audio for: %s", redact_user_text(text))
+            except Exception as e:
+                logging.warning(f"Failed to cache audio: {e}")
+
+        if generation_error[0]:
+            raise generation_error[0]
+
+    @staticmethod
+    def _drain_local_queue(audio_queue):
+        while True:
+            try:
+                audio_queue.get_nowait()
+            except queue.Empty:
+                return
+
+    def _generate_kokoro_audio(
+        self,
+        text: str,
+        speed: float,
+        voice_hint: str,
+        voice_spec: Optional[Union[str, np.ndarray]] = None,
+        modulation: Optional[dict] = None,
+    ):
+        """Generate audio for a single chunk without playing it. Returns (audio_array, sample_rate) or None.
+
+        `voice_spec`, if given, is either a resolved voice-id string or a
+        blended style tensor (see `_resolve_voice_spec`) and takes priority
+        over `voice_hint`. `modulation`, if given, is applied to the
+        generated audio before it's returned (see voice_modulation.apply_modulation).
+        Both default to None so existing callers (e.g. `render_prepared_chunks`)
+        see identical behavior to before this parameter was added.
+
+        Cloned voices (voice_hint "cloned_*"): Kokoro synthesizes with a base
+        voice, then voice_clone_engine re-voices the audio to the stored
+        reference sample (before modulation, so user tone controls shape the
+        final cloned voice). speak() gates availability up front; a failure
+        here raises rather than silently playing the base voice.
+        """
+        clone_reference = None
+        if voice_clone_engine.is_cloned_voice_id(voice_hint):
+            clone_reference = voice_clone_engine.find_reference_sample(voice_hint)
+            if clone_reference is None:
+                raise RuntimeError(f"Cloned voice sample for '{voice_hint}' was not found.")
+            # Synthesize with a base voice; the conversion supplies the identity.
+            if not isinstance(voice_spec, np.ndarray):
+                voice_spec = None
+            voice_hint = "af_heart"
+
+        if self._kokoro_runtime == "native":
+            if self._kokoro_pipeline is None:
+                raise RuntimeError("Kokoro pipeline is not initialized.")
+
+            if isinstance(voice_spec, np.ndarray):
+                # Native backend doesn't accept raw tensor voices; fall back
+                # to the (alias-resolved) base voice hint.
+                voice = self._resolve_kokoro_voice(voice_hint)
+            else:
+                voice = voice_spec if voice_spec else self._resolve_kokoro_voice(voice_hint)
+            generated = self._kokoro_pipeline(text, voice=voice, speed=max(0.5, min(3.0, float(speed))))
+
+            audio_chunks = []
+            for item in generated:
+                audio = None
+                if isinstance(item, tuple):
+                    if len(item) >= 3:
+                        audio = item[2]
+                    elif len(item) > 0:
+                        audio = item[-1]
+                else:
+                    audio = item
+                if audio is None:
+                    continue
+                arr = np.asarray(audio, dtype=np.float32).flatten()
+                if arr.size > 0:
+                    audio_chunks.append(arr)
+
+            if not audio_chunks:
+                return None
+
+            merged = np.concatenate(audio_chunks, axis=0)
+            sample_rate = 24000
+            if clone_reference is not None:
+                merged, sample_rate = voice_clone_engine.convert(merged, sample_rate, clone_reference)
+            merged = voice_modulation.apply_modulation(merged, sample_rate, modulation)
+            return (merged, sample_rate)
+
+        if self._kokoro_runtime == "onnx":
+            if self._kokoro_onnx is None:
+                raise RuntimeError("kokoro-onnx engine is not initialized.")
+            if isinstance(voice_spec, np.ndarray):
+                voice = voice_spec
+            else:
+                voice = voice_spec if voice_spec else self._resolve_kokoro_voice(voice_hint)
+                if not self._onnx_voice_exists(voice):
+                    voice = self._first_onnx_voice() or "af_heart"
+            audio, sample_rate = self._kokoro_onnx.create(
+                text=text,
+                voice=voice,
+                speed=max(0.5, min(2.0, float(speed))),
+                lang="en-us",
+            )
+            merged = np.asarray(audio, dtype=np.float32).flatten()
+            if merged.size == 0:
+                return None
+            sample_rate = int(sample_rate)
+            if clone_reference is not None:
+                merged, sample_rate = voice_clone_engine.convert(merged, sample_rate, clone_reference)
+            merged = voice_modulation.apply_modulation(merged, sample_rate, modulation)
+            return (merged, sample_rate)
+
+        raise RuntimeError("Kokoro backend is not initialized.")

@@ -78,13 +78,22 @@ class WebSocketAuthTests(unittest.TestCase):
                 with self.assertRaises(Exception):
                     ws.receive_text()  # closed with 1008
 
-    def test_legacy_query_param_still_accepted(self):
+    def test_query_string_token_is_not_accepted(self):
+        """Phase 0 item 10: a token in the URL reaches access logs, so the legacy
+        ``?token=`` form no longer authenticates, even with the right value."""
         client = TestClient(server.app)
         with patch.dict(os.environ, {"BETTERFINGERS_AUTH_TOKEN": "ws-secret"}):
             with client.websocket_connect("/ws/voice_status?token=ws-secret") as ws:
+                ws.send_text("ping")  # not the auth frame
+                with self.assertRaises(Exception):
+                    ws.receive_text()  # closed with 1008, never auth_ok
+
+    def test_query_string_token_does_not_replace_the_first_frame(self):
+        client = TestClient(server.app)
+        with patch.dict(os.environ, {"BETTERFINGERS_AUTH_TOKEN": "ws-secret"}):
+            with client.websocket_connect("/ws/voice_status?token=wrong") as ws:
+                ws.send_text("auth:ws-secret")
                 self.assertEqual(ws.receive_text(), "auth_ok")
-                ws.send_text("ping")
-                self.assertEqual(ws.receive_text(), "pong")
 
     def test_no_token_configured_accepts_plainly(self):
         client = TestClient(server.app)

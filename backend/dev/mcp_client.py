@@ -1,0 +1,545 @@
+"""Minimal MCP client (C12, step 1): list a configured server's tools.
+
+Configuration lives in `<userdata>/mcp_servers.json`, Claude-Desktop style:
+
+    {
+      "enabled": false,
+      "mcpServers": {
+        "example": {
+          "command": "python3",
+          "args": ["/path/to/server.py"],
+          "env": {},
+          "enabled": true,
+          "network": true
+        }
+      }
+    }
+
+Every server is UNTRUSTED and runs only inside the strict bubblewrap sandbox on Linux
+(see the sandbox section below). Where bubblewrap is unavailable -- Windows, macOS, or Linux
+without a usable bwrap -- MCP servers are DISABLED, with a message that says why. There is no
+"trusted on this machine" exception (round 4, item 4). "network": true gives a server the
+network; it is off otherwise (the listing warns about what it allows).
+
+Install your server here: ``<userdata>/mcp-servers/<server name>/`` (the app creates the folder).
+"install_dir" (one path or a list) and the folder of an absolute "command" are mounted read-only,
+and each may only be inside that folder or a system location under /usr, /opt or /nix/store,
+judged after resolving every symlink. Anything else -- the rest of the home, /run, /proc, /tmp,
+/etc, the app's own data -- refuses the server with the reason. Arguments are never mounted:
+a script the server needs belongs in its folder. Example:
+
+    "notes": {
+      "command": "/usr/bin/python3",
+      "args": ["<userdata>/mcp-servers/notes/server.py"],
+      "install_dir": "<userdata>/mcp-servers/notes"
+    }
+
+The whole feature is gated by the top-level "enabled" flag (default false) and
+kept fully defensive: the `mcp` SDK is imported lazily, and any failure here
+must never disrupt the dictation pipeline. Tool *invocation*, llama-server
+bridging, and per-persona allowlists are later C12 steps.
+"""
+import asyncio
+import functools
+import json
+import logging
+import os
+import re
+import shutil
+import subprocess
+import sys
+import threading
+
+from backend.config.utils import get_user_data_path
+
+DEFAULT_TIMEOUT_SECONDS = 15.0
+
+_lock = threading.Lock()
+
+
+def _config_path():
+    return os.path.join(get_user_data_path(), "mcp_servers.json")
+
+
+def sdk_available():
+    try:
+        import mcp  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
+# --- the MCP subprocess sandbox (round 2, item 3; round 3, item 4; round 4, item 4) -------------
+#
+# Scrubbing the environment (Phase 0 item 9) stops an MCP server INHERITING credentials; it
+# does not stop a hostile same-user executable from looking for them, or from driving the
+# desktop. Three layers:
+#   1. the backend holds no credential in its environment (backend/privacy/boot_secrets.py),
+#   2. the backend is non-dumpable on Linux, so /proc/<pid>/{environ,mem,maps} are not
+#      readable by other processes of the same user (and a launch that cannot set that
+#      refuses to hold its secrets at all), and
+#   3. EVERY MCP SERVER RUNS ONLY INSIDE THE STRICT BUBBLEWRAP SANDBOX (``_bwrap_profile``):
+#      its own PID, IPC and UTS namespaces, no new privileges, no capabilities, and a
+#      filesystem made of ONLY the system runtime (/usr and the /lib*, /bin, /sbin links,
+#      read-only), a handful of /etc files programs need to start, the server's own install
+#      folder (read-only; see "what may be mounted" below), an empty tmpfs home, a private /tmp, a fresh /dev and /proc. The host
+#      home, the app's data folder, /run (the D-Bus buses, Wayland, PipeWire, keyrings,
+#      $XDG_RUNTIME_DIR) and the X11 sockets are simply not there. The network is cut unless the
+#      server's config says ``"network": true``. It dies with the backend (--die-with-parent).
+#
+# Round 4 (Codex re-check 3, finding 5): ``bwrap`` itself is started with a FIXED, trusted
+# environment (``TRUSTED_PATH`` and nothing the server config supplied). The server's own
+# ``env`` block is installed INSIDE the sandbox with ``--clearenv`` / ``--setenv``, and loader or
+# runtime-injection variables (``LD_*``, ``GCONV_PATH`` and the rest of glibc's unsecure list,
+# ``PATH``, ``BETTERFINGERS_*``) are refused outright: an ``LD_PRELOAD`` reaching a dynamically
+# linked bwrap would run before any confinement existed.
+#
+# Round 4 (finding 4, director's Phase 0 policy): where that sandbox cannot be established --
+# Windows, macOS, no bwrap, a bwrap that cannot create namespaces, or a config that says
+# ``"sandbox": "off"`` -- MCP servers are DISABLED with a message that says why. The round 3
+# "trusted on this machine" exception (persistent consent to run weaker or unconfined) is gone,
+# with its storage, its route and its dialog: a one-time tap cannot make every later launch of
+# an unconfined process harmless. MCP on Windows and macOS waits for a real sandbox (SECURITY.md).
+#
+# KNOWN LIMIT, stated plainly: with ``"network": true`` a server shares the host network
+# namespace, so ABSTRACT unix sockets (for example an X server listening on "@/tmp/.X11-unix/X0")
+# stay reachable. No X authority file is mounted, which defeats cookie authentication, but an X
+# server configured to accept local connections without a cookie (xhost +local:) would still
+# accept one. That is why the network is off by default and the listing shows the flag.
+
+NETWORK_WARNING = (
+    'Network on: this server shares the computer\'s network. It can reach local network services, and '
+    'abstract unix sockets such as an X server\'s, which a desktop may accept without a password. Turn '
+    '"network" off unless the server needs the internet.'
+)
+
+REQUIRED_CONFINEMENT = "bubblewrap"
+TRUSTED_PATH = "/usr/local/bin:/usr/bin:/bin"
+
+# The system runtime a program needs to start: read-only, and a symlink stays a symlink.
+_SYSTEM_PATHS = ("/usr", "/bin", "/sbin", "/lib", "/lib64", "/lib32", "/libx32")
+# The /etc files a program needs to start (dynamic loader, users, time zone, alternatives)...
+_ETC_BASE = (
+    "/etc/ld.so.cache", "/etc/ld.so.conf", "/etc/ld.so.conf.d", "/etc/alternatives", "/etc/localtime",
+    "/etc/nsswitch.conf", "/etc/passwd", "/etc/group",
+)
+# ...and, only for a server allowed the network, name resolution and the CA certificates.
+_ETC_NETWORK = (
+    "/etc/resolv.conf", "/etc/hosts", "/etc/host.conf", "/etc/gai.conf", "/etc/ssl", "/etc/ca-certificates",
+    "/etc/pki",
+)
+
+# Never given to bwrap, and never installed inside the sandbox either: glibc's "unsecure"
+# variables (ignored for setuid programs because they load code or redirect lookups), every
+# LD_* variable, PATH (the sandbox's own PATH is fixed) and the app's own credentials.
+_DENIED_ENV = frozenset({
+    "GCONV_PATH", "GETCONF_DIR", "HOSTALIASES", "LOCALDOMAIN", "LOCPATH", "MALLOC_TRACE", "NIS_PATH",
+    "NLSPATH", "RESOLV_HOST_CONF", "RES_OPTIONS", "TMPDIR", "TZDIR", "MALLOC_CHECK_", "MALLOC_PERTURB_",
+    "PATH",
+})
+_DENIED_ENV_PREFIXES = ("LD_", "BETTERFINGERS_")
+
+
+class McpConfinementError(PermissionError):
+    """MCP servers cannot run here (no strict sandbox), or this one is configured to run outside
+    it. The message says why and what would make it work. Nothing is ever started."""
+
+
+def is_denied_env(name):
+    """True for a variable that may reach neither bwrap nor the sandboxed server."""
+    upper = str(name).upper()
+    return upper in _DENIED_ENV or upper.startswith(_DENIED_ENV_PREFIXES)
+
+
+@functools.lru_cache(maxsize=4)
+def _bwrap_works(path):
+    """bubblewrap can be installed and still unusable (unprivileged user namespaces off, an
+    AppArmor restriction). Probe once with flags the profile needs."""
+    try:
+        result = subprocess.run(
+            [path, "--die-with-parent", "--unshare-pid", "--unshare-net", "--clearenv",
+             "--ro-bind", "/usr", "/usr", "--symlink", "usr/bin", "/bin", "--symlink", "usr/lib", "/lib",
+             "--symlink", "usr/lib64", "/lib64", "--dev", "/dev", "--proc", "/proc", "--", "/usr/bin/true"],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10, check=False,
+            env={"PATH": TRUSTED_PATH},
+        )
+        return result.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def sandbox_kind(*, platform=None, which=shutil.which):
+    """'bubblewrap' when the strict sandbox can be established here, otherwise 'none' (and MCP
+    servers are disabled)."""
+    platform = sys.platform if platform is None else platform
+    if not platform.startswith("linux"):
+        return "none"
+    bwrap = which("bwrap")
+    # A probe only for the real lookup: tests inject ``which`` to describe a machine.
+    if bwrap and (which is not shutil.which or _bwrap_works(bwrap)):
+        return REQUIRED_CONFINEMENT
+    return "none"
+
+
+def _why_disabled(spec, *, platform, which):
+    if str(spec.get("sandbox", "auto")).lower() == "off":
+        return ('its configuration says "sandbox": "off", and BetterFingers never runs an MCP server outside '
+                "its sandbox. Remove that setting.")
+    if platform.startswith("win"):
+        return ("MCP servers are disabled on Windows: BetterFingers runs them only inside a strict sandbox, "
+                "and it does not have one for Windows yet.")
+    if platform == "darwin":
+        return ("MCP servers are disabled on macOS: BetterFingers runs them only inside a strict sandbox, "
+                "and it does not have one for macOS yet.")
+    if not platform.startswith("linux"):
+        return "MCP servers are disabled on this operating system: BetterFingers has no strict sandbox for it."
+    if not which("bwrap"):
+        return ("MCP servers are disabled on this computer: they run only inside the bubblewrap sandbox, and "
+                "bubblewrap (bwrap) is not installed. Install it to use MCP servers.")
+    return ("MCP servers are disabled on this computer: bubblewrap is installed but cannot create a sandbox "
+            "here (unprivileged user namespaces may be turned off).")
+
+
+def _is_system_path(path):
+    return any(path == root or path.startswith(root + os.sep) for root in _SYSTEM_PATHS)
+
+
+def _under(path, root):
+    """``path`` is ``root`` or inside it (plain string test on already-resolved paths)."""
+    root = root.rstrip(os.sep) or os.sep
+    return path == root or path.startswith(root + os.sep) if root != os.sep else path.startswith(os.sep)
+
+
+# --- what may be mounted into the sandbox (round 5, item 1) ---------------------------------------
+#
+# Codex re-check 4, blocker 1: ``install_dir``, an absolute command's folder and every absolute FILE
+# argument used to be mounted unless they were, or contained, the home or the data folder. So a
+# config could mount /run (D-Bus, Wayland, PipeWire sockets: read-only does not stop a socket
+# accepting commands), the host /proc, or ~/.ssh and one key file named as an argument; and those
+# binds came after the private /dev, /proc and /tmp, so they could replace them. Now (director's
+# decisions):
+#   * an argument is never mounted: it is passed to the server as text, nothing more;
+#   * ``install_dir`` and an absolute command's folder may only be inside the server's OWN folder,
+#     ``<app data>/mcp-servers/<server name>/`` (the app creates it: install your server there), or a
+#     read-only system location under /usr, /opt or /nix/store -- judged on the REAL path, every
+#     symlink resolved first;
+#   * anything else refuses the whole server with the reason. A mount is never silently dropped;
+#   * configured binds come before the private /dev, /proc and /tmp, so each isolation mount is the
+#     last mount for its path. The empty home is created BEFORE them: the server's folder lives
+#     under the home in a normal install, a strict descendant of it, and would be hidden otherwise.
+#     Nothing configured can be the home or contain it.
+SERVERS_DIRNAME = "mcp-servers"
+_MOUNT_SYSTEM_ROOTS = ("/usr", "/opt", "/nix/store")
+# Never mounted, whatever is asked: host services and sockets, process and kernel filesystems,
+# devices, shared temporary folders and host configuration (the fixed /etc files are separate).
+# (bandit B108: these are paths REFUSED as mounts; nothing here creates or writes a temp file.)
+_NEVER_MOUNTED = ("/run", "/var/run", "/proc", "/sys", "/dev", "/tmp", "/var/tmp", "/etc")  # nosec B108
+_SERVER_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+
+
+def server_install_root(name, data_root):
+    """``<app data>/mcp-servers/<name>`` (the data folder's real path), or None when ``name`` cannot
+    be a folder name (it must start with a letter or digit and use only letters, digits, ``.``,
+    ``_`` and ``-``)."""
+    if not data_root or not _SERVER_NAME.fullmatch(str(name)):
+        return None
+    return os.path.join(os.path.realpath(data_root), SERVERS_DIRNAME, str(name))
+
+
+def ensure_install_root(name, data_root):
+    """Create the server's own folder if it is missing (never through a link). Returns its path,
+    or None when the name cannot have one."""
+    root = server_install_root(name, data_root)
+    if root and not os.path.lexists(root):
+        try:
+            os.makedirs(root, mode=0o700, exist_ok=True)
+        except OSError as exc:
+            logging.warning(f"mcp_client: could not create {root}: {exc}")
+    return root
+
+
+def _usable_root(server_root):
+    """The server's folder counts only when it is a real folder at exactly that path (no link in
+    ``mcp-servers`` or the server's own component) outside every never-mounted location."""
+    if not server_root or os.path.realpath(server_root) != server_root:
+        return False
+    return not any(_under(server_root, denied) for denied in _NEVER_MOUNTED)
+
+
+def mount_refusal(real, *, server_root, home, data_root):
+    """None when the RESOLVED path ``real`` may be mounted read-only into the sandbox; otherwise
+    the reason it may not, in words for the server listing."""
+    if _usable_root(server_root) and _under(real, server_root):
+        return None
+    if (any(real != root and _under(real, root) for root in _MOUNT_SYSTEM_ROOTS)
+            and not any(_under(real, denied) for denied in _NEVER_MOUNTED)):
+        return None
+    if server_root and _under(real, server_root):
+        return "the server's folder is a link or sits where the sandbox never mounts anything"
+    for denied in _NEVER_MOUNTED:
+        if _under(real, denied):
+            return f"{denied} is never mounted into the sandbox"
+    if data_root and _under(real, os.path.realpath(data_root)):
+        return "it is inside BetterFingers' own data folder, where only the server's own folder may be mounted"
+    if home and (_under(real, os.path.realpath(home)) or _under(os.path.realpath(home), real)):
+        return "it is in (or contains) your home folder"
+    return "it is not an allowed install location"
+
+
+def install_binds(name, spec, *, home, data_root):
+    """The folders mounted read-only for server ``name``: its ``install_dir`` entries and the
+    folder of an absolute command outside the system runtime, each resolved and checked by
+    ``mount_refusal``. Raises ``McpConfinementError`` when ANY requested mount is refused: the
+    server does not start with less than it asked for."""
+    root = server_install_root(name, data_root)
+    where = (f"Install the server in its own folder, {root}{os.sep}, or use a system location under /usr, "
+             "/opt or /nix/store." if root else
+             "Rename the server (letters, digits, '.', '_' and '-', starting with a letter or digit) to give it "
+             "its own install folder, or use a system location under /usr, /opt or /nix/store.")
+
+    def refuse(path, reason):
+        raise McpConfinementError(
+            f"MCP server '{name}' was not started: it asks to mount {path!r}, and {reason}. {where} "
+            "Nothing was started.")
+
+    wanted = []
+    configured = spec.get("install_dir")
+    if configured is not None:
+        items = configured if isinstance(configured, list) else [configured]
+        for item in items:
+            if not isinstance(item, str):
+                refuse(str(item), "an install_dir entry must be a folder path")
+            if not item.strip():
+                continue
+            path = os.path.expanduser(item.strip())
+            if not os.path.isabs(path):
+                refuse(item, "an install_dir entry must be an absolute path")
+            wanted.append(path)
+    command = str(spec.get("command", ""))
+    if os.path.isabs(command):
+        real_command = os.path.realpath(command)
+        if not (_is_system_path(command) and _is_system_path(real_command)):
+            wanted.append(os.path.dirname(command))
+            # The command itself must not lead out of the allowed roots through a link.
+            if not _is_system_path(real_command):
+                reason = mount_refusal(real_command, server_root=root, home=home, data_root=data_root)
+                if reason:
+                    refuse(command, reason)
+    out = []
+    for path in wanted:
+        real = os.path.realpath(path)
+        reason = mount_refusal(real, server_root=root, home=home, data_root=data_root)
+        if reason:
+            refuse(path, reason)
+        if real not in out:
+            out.append(real)
+    return out
+
+
+def _bwrap_profile(command, args, *, home, network, binds, env):
+    wrapped = [
+        "--die-with-parent", "--new-session", "--unshare-pid", "--unshare-ipc", "--unshare-uts",
+        "--unshare-cgroup-try", "--cap-drop", "ALL",
+    ]
+    if not network:
+        wrapped.append("--unshare-net")
+    for path in _SYSTEM_PATHS:
+        if os.path.islink(path):
+            wrapped += ["--symlink", os.readlink(path), path]
+        elif os.path.exists(path):
+            wrapped += ["--ro-bind", path, path]
+    for path in _ETC_BASE + (_ETC_NETWORK if network else ()):
+        wrapped += ["--ro-bind-try", path, path]
+    # Round 5, item 1: the empty home, then the configured (checked) binds, then the private /dev,
+    # /proc and /tmp LAST, so nothing configured can be mounted over them.
+    wrapped += ["--tmpfs", home]
+    for path in binds:
+        wrapped += ["--ro-bind-try", path, path]
+    # (bandit B108: "/tmp" is the mount point of a fresh, private tmpfs inside the sandbox.)
+    wrapped += ["--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp"]  # nosec B108
+    wrapped.append("--clearenv")
+    for name, value in env.items():
+        wrapped += ["--setenv", name, value]
+    return [*wrapped, "--chdir", home, "--", command, *args]
+
+
+def _inside_env(spec, *, home, environ):
+    # (bandit B108: inside the sandbox /tmp is that private tmpfs, not the host's /tmp.)
+    env = {"PATH": TRUSTED_PATH, "HOME": home, "TMPDIR": "/tmp"}  # nosec B108
+    for name, value in environ.items():
+        upper = str(name).upper()
+        if upper in ("LANG", "LANGUAGE", "TZ", "TERM") or upper.startswith("LC_"):
+            env[str(name)] = str(value)
+    for name, value in spec.get("env", {}).items():
+        if not is_denied_env(name):
+            env[str(name)] = str(value)
+    return env
+
+
+def launch_plan(name, spec, *, platform=None, which=shutil.which, data_root=None, home=None, environ=None):
+    """How to start server ``name`` inside the strict sandbox, or ``McpConfinementError`` (with
+    the reason) when MCP servers cannot run here or this one is configured to run outside it."""
+    platform = sys.platform if platform is None else platform
+    data_root = get_user_data_path() if data_root is None else data_root
+    mode = str(spec.get("sandbox", "auto")).lower()
+    if mode == "off" or sandbox_kind(platform=platform, which=which) != REQUIRED_CONFINEMENT:
+        reason = _why_disabled(spec, platform=platform, which=which)
+        raise McpConfinementError(f"MCP server '{name}' was not started. {reason} Nothing was started.")
+    home = os.path.realpath(home or os.path.expanduser("~"))
+    environ = os.environ if environ is None else environ
+    network = spec.get("network") is True
+    ensure_install_root(name, data_root)
+    binds = install_binds(name, spec, home=home, data_root=data_root)
+    inside = _inside_env(spec, home=home, environ=environ)
+    args = _bwrap_profile(spec["command"], [str(a) for a in spec.get("args", [])], home=home,
+                          network=network, binds=binds, env=inside)
+    return {"command": which("bwrap"), "args": args, "kind": REQUIRED_CONFINEMENT, "network": network,
+            "binds": binds}
+
+
+def stdio_launch(name, spec, **kw):
+    """What the stdio client starts: ``bwrap`` with its profile, and the FIXED environment the
+    bwrap process itself gets (never the server's ``env`` block; that is inside the profile)."""
+    plan = launch_plan(name, spec, **kw)
+    return {"command": plan["command"], "args": plan["args"], "env": {"PATH": TRUSTED_PATH}, "plan": plan}
+
+
+def load_config():
+    """Parse mcp_servers.json. Missing or invalid files mean 'disabled'."""
+    path = _config_path()
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            raw = json.load(handle)
+    except FileNotFoundError:
+        return {"enabled": False, "mcpServers": {}}
+    except Exception as exc:
+        logging.warning(f"mcp_client: could not parse {path}: {exc}")
+        return {"enabled": False, "mcpServers": {}, "config_error": str(exc)}
+
+    if not isinstance(raw, dict):
+        return {"enabled": False, "mcpServers": {}, "config_error": "top level must be an object"}
+
+    servers = raw.get("mcpServers")
+    if not isinstance(servers, dict):
+        servers = {}
+    cleaned = {}
+    for name, spec in servers.items():
+        if not isinstance(spec, dict) or not isinstance(spec.get("command"), str) or not spec["command"].strip():
+            logging.warning(f"mcp_client: server '{name}' skipped (missing command)")
+            continue
+        cleaned[name] = {
+            "command": spec["command"],
+            "args": [str(item) for item in spec.get("args", []) if isinstance(item, (str, int, float))],
+            "env": {str(k): str(v) for k, v in spec.get("env", {}).items()} if isinstance(spec.get("env"), dict) else {},
+            "enabled": bool(spec.get("enabled", True)),
+            "sandbox": "off" if str(spec.get("sandbox", "auto")).lower() == "off" else "auto",
+            # Round 4, item 4: the network is OFF unless the config says exactly "network": true.
+            "network": spec.get("network", False) is True,
+        }
+        # Round 5, item 1: kept AS WRITTEN, malformed or not. ``install_binds`` refuses a malformed
+        # entry with the reason instead of the server quietly starting without it.
+        if spec.get("install_dir") is not None:
+            cleaned[name]["install_dir"] = spec["install_dir"]
+    return {"enabled": bool(raw.get("enabled", False)), "mcpServers": cleaned}
+
+
+def status():
+    config = load_config()
+    payload = {
+        "sdk_available": sdk_available(),
+        "enabled": config["enabled"],
+        "config_path": _config_path(),
+        "server_count": len(config["mcpServers"]),
+    }
+    if "config_error" in config:
+        payload["config_error"] = config["config_error"]
+    return payload
+
+
+def list_servers():
+    config = load_config()
+    return [
+        _listing_row(name, spec)
+        for name, spec in sorted(config["mcpServers"].items())
+    ]
+
+
+def _listing_row(name, spec):
+    """Round 4, item 4: the FULL configuration -- command, every argument, every environment
+    value, the network flag and the folders mounted into the sandbox. With no trust dialog there
+    is no consent screen for a masked preview to stand in for; this listing is what the owner
+    reads, so it hides nothing."""
+    try:
+        plan = launch_plan(name, spec)
+        sandbox, starts, why, binds = plan["kind"], True, "", plan["binds"]
+    except McpConfinementError as exc:
+        sandbox, starts, why, binds = "disabled", False, str(exc), []
+    return {
+        # Round 5, item 1: where this server's files go, and what "network": true really allows.
+        "install_root": server_install_root(name, get_user_data_path()),
+        "warning": NETWORK_WARNING if spec["network"] else "",
+        "name": name,
+        "command": spec["command"],
+        "args": list(spec["args"]),
+        "env": dict(spec["env"]),
+        "enabled": spec["enabled"],
+        "network": spec["network"],
+        "install_dir": spec.get("install_dir"),
+        "mounted_read_only": binds,
+        "sandbox": sandbox,
+        "will_start": starts,
+        "why": why,
+    }
+
+
+async def _list_tools_async(launch, timeout):
+    from mcp import ClientSession, StdioServerParameters
+    from mcp.client.stdio import stdio_client
+
+    # ``bwrap`` gets ONLY the fixed environment from ``stdio_launch`` (round 4, item 4). The
+    # server's own variables are installed inside the sandbox by the profile; the backend's
+    # environment (bearer token, approval key, provider keys) reaches neither.
+    params = StdioServerParameters(command=launch["command"], args=launch["args"], env=launch["env"])
+    async with stdio_client(params) as (read, write):
+        async with ClientSession(read, write) as session:
+            await asyncio.wait_for(session.initialize(), timeout)
+            result = await asyncio.wait_for(session.list_tools(), timeout)
+    return [
+        {
+            "name": tool.name,
+            "description": tool.description or "",
+            "input_schema": tool.inputSchema,
+        }
+        for tool in result.tools
+    ]
+
+
+def list_tools(server_name, timeout=DEFAULT_TIMEOUT_SECONDS):
+    """Connect to one configured stdio server and return its tool list.
+
+    Returns {"ok": bool, "tools": [...]} or {"ok": False, "error": str}.
+    Raises KeyError if the server is not configured, PermissionError if the
+    feature or the server is disabled, McpConfinementError (a PermissionError)
+    if the strict sandbox cannot be established here, RuntimeError if the SDK
+    is missing.
+    """
+    config = load_config()
+    if not config["enabled"]:
+        raise PermissionError("MCP support is disabled (set \"enabled\": true in mcp_servers.json)")
+    spec = config["mcpServers"].get(server_name)
+    if spec is None:
+        raise KeyError(server_name)
+    if not spec["enabled"]:
+        raise PermissionError(f"MCP server '{server_name}' is disabled")
+    if not sdk_available():
+        raise RuntimeError("the 'mcp' Python SDK is not installed")
+    # Refuse BEFORE anything starts when the strict sandbox cannot be established.
+    launch = stdio_launch(server_name, spec)
+
+    with _lock:
+        try:
+            tools = asyncio.run(_list_tools_async(launch, timeout))
+            return {"ok": True, "server": server_name, "tools": tools}
+        except Exception as exc:
+            logging.warning(f"mcp_client: listing tools on '{server_name}' failed: {exc}")
+            return {"ok": False, "server": server_name, "error": str(exc)}

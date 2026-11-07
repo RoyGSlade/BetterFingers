@@ -6,7 +6,8 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 import server
-import llm_engine
+from backend.api.routes import runtime as routes_runtime
+from backend.llm import llm_engine
 
 
 class DummyTranscriber:
@@ -253,9 +254,15 @@ class ServerLazyStartupTests(unittest.TestCase):
         def _get_engine_if_initialized():
             return engine_holder.get("engine")
 
+        # The fake profile above has no llm_model_id, so /runtime/warmup takes
+        # server.get_selected_llm_model_id's repair branch and would persist
+        # this dict over the session-wide profiles/Default.yaml (seeded with
+        # llm_enabled: true by conftest). Keep that write off disk.
         with patch.dict(os.environ, {"BETTERFINGERS_LAZY_STARTUP": "1"}, clear=False), patch.object(
             server, "Transcriber", DummyTranscriber
         ), patch.object(server, "load_profile", return_value=profile), patch.object(
+            server, "save_runtime_profile"
+        ), patch.object(
             server, "get_engine", side_effect=_get_engine
         ), patch.object(
             server, "get_engine_if_initialized", side_effect=_get_engine_if_initialized
@@ -295,7 +302,11 @@ class ServerLazyStartupTests(unittest.TestCase):
                 self.assertFalse(status_after.json()["hotkey_manager_started"])
 
     def test_warmup_returns_200_with_structured_llm_failure(self):
-        with TestClient(server.app) as client, patch.object(
+        # DummyTranscriber: this test is about LLM warmup, but TestClient
+        # startup runs the real warm-up thread (this module is exempt from
+        # conftest's warm-start guard), which would otherwise load the real
+        # Whisper model -- on CUDA once a GPU runtime is installed (~30 s).
+        with patch.object(server, "Transcriber", DummyTranscriber), TestClient(server.app) as client, patch.object(
             server, "get_engine", side_effect=RuntimeError("llama-server missing")
         ), patch.object(server, "get_engine_if_initialized", return_value=None):
             warmup = client.post(
@@ -315,8 +326,8 @@ class ServerLazyStartupTests(unittest.TestCase):
         server.transcriber = probe
 
         result = asyncio.run(
-            server.runtime_warmup(
-                server.RuntimeWarmupRequest(stt=True, llm=False, hotkeys=False)
+            routes_runtime.runtime_warmup(
+                routes_runtime.RuntimeWarmupRequest(stt=True, llm=False, hotkeys=False)
             )
         )
 
@@ -375,6 +386,45 @@ class ServerLazyStartupTests(unittest.TestCase):
             self.assertTrue(result["tts"]["loaded"], "resident now, eligible for safe idle cleanup")
         finally:
             server.tts_engine = None
+
+
+def test_fresh_startup_residency_and_manual_warmup_never_download(monkeypatch, tmp_path):
+    """Use the actual loader on an empty fake cache, even with STT pinned."""
+    from unittest.mock import Mock
+    import huggingface_hub
+    import requests
+    from backend.stt import transcriber as stt
+
+    profile = {"model_keep_stt_loaded": True, "model_keep_llm_loaded": False,
+               "model_keep_tts_loaded": False, "model_size": "base.en", "use_gpu": False}
+    network = Mock(side_effect=AssertionError("Startup must never contact model providers"))
+    constructor = Mock(side_effect=AssertionError("Missing model must not construct"))
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", network)
+    monkeypatch.setattr(huggingface_hub, "hf_hub_download", network)
+    monkeypatch.setattr(requests.sessions.Session, "request", network)
+    monkeypatch.setattr(stt, "HF_HUB_CACHE", str(tmp_path / "empty-hub"))
+    monkeypatch.setattr(stt, "WhisperModel", constructor)
+    monkeypatch.setattr(stt, "load_profile", lambda name: profile)
+    monkeypatch.setattr(server, "load_profile", lambda name: profile)
+    monkeypatch.setattr(server, "Transcriber", stt.Transcriber)
+    monkeypatch.setattr(server, "transcriber", None)
+    monkeypatch.setattr(server, "_is_test_env", lambda: True)
+    monkeypatch.setattr(server, "load_draft_history", lambda: None)
+    monkeypatch.setattr(server, "recover_interrupted_sends", lambda: None)
+    monkeypatch.setattr(server.model_runtime, "request_admission", lambda *args: {"allowed": True})
+    monkeypatch.setenv("BETTERFINGERS_LAZY_STARTUP", "1")
+
+    asyncio.run(server.startup_event())
+    server._warmup_thread.join(timeout=5)
+    assert not server._warmup_thread.is_alive()
+    assert server.transcriber.get_runtime_status()["error_code"] == "model_missing"
+    assert server.transcriber.model is None
+    result = asyncio.run(routes_runtime.runtime_warmup(
+        routes_runtime.RuntimeWarmupRequest(stt=True, llm=False, hotkeys=False)))
+    assert result["stt"]["ok"] is False
+    assert result["stt"]["error_code"] == "model_missing"
+    constructor.assert_not_called()
+    network.assert_not_called()
 
 
 if __name__ == "__main__":
