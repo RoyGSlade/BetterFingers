@@ -17,7 +17,6 @@ runtime plus the server's own install directory only, home is an empty tmpfs, no
 """
 import json
 import os
-import sys
 import tempfile
 import unittest
 from unittest.mock import patch

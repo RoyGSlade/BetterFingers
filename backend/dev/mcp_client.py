@@ -270,9 +270,9 @@ def mount_refusal(real, *, server_root, home, data_root):
     the reason it may not, in words for the server listing."""
     if _usable_root(server_root) and _under(real, server_root):
         return None
-    if any(real != root and _under(real, root) for root in _MOUNT_SYSTEM_ROOTS):
-        if not any(_under(real, denied) for denied in _NEVER_MOUNTED):
-            return None
+    if (any(real != root and _under(real, root) for root in _MOUNT_SYSTEM_ROOTS)
+            and not any(_under(real, denied) for denied in _NEVER_MOUNTED)):
+        return None
     if server_root and _under(real, server_root):
         return "the server's folder is a link or sits where the sandbox never mounts anything"
     for denied in _NEVER_MOUNTED:
