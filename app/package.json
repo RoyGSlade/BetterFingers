@@ -24,9 +24,9 @@
     "dist:linux": "npm run build && npm run build:backend && electron-builder --config electron-builder.config.cjs --linux --publish never"
   },
   "devDependencies": {
-    "@playwright/test": "^1.62.1",
+    "@playwright/test": "^1.64.1",
     "electron": "43.2.0",
-    "electron-builder": "26.15.3",
+    "electron-builder": "26.18.0",
     "electron-vite": "^5.0.0"
   },
   "build": {
@@ -120,7 +120,7 @@
     "esbuild@0.27.7": true
   },
   "dependencies": {
-    "electron-updater": "6.8.9",
+    "electron-updater": "6.8.11",
     "uiohook-napi": "^1.5.5"
   }
 }
