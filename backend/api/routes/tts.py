@@ -346,10 +346,14 @@ async def delete_cloned_voice(voice_id: str):
     safe = os.path.basename(str(voice_id or "").strip())
     if not safe.startswith("cloned_") or safe != voice_id.strip():
         raise HTTPException(status_code=400, detail="Only cloned voices (cloned_*) can be deleted.")
-    voices_dir = s.get_voices_path()
+    voices_dir = os.path.normpath(str(s.get_voices_path()))
     removed = []
     for suffix in (".wav", ".npy", ".meta.json"):
-        path = os.path.join(str(voices_dir), f"{safe}{suffix}")
+        path = os.path.normpath(os.path.join(voices_dir, f"{safe}{suffix}"))
+        # The name is already a bare cloned_* basename; this also proves the joined path is a
+        # direct child of the voices folder before anything is checked or removed.
+        if os.path.dirname(path) != voices_dir or not path.startswith(os.path.join(voices_dir, "")):
+            raise HTTPException(status_code=400, detail="Only cloned voices (cloned_*) can be deleted.")
         try:
             if os.path.exists(path):
                 os.remove(path)

@@ -238,14 +238,20 @@ async def export_project(request: ExportRequest):
 
         # Save under the user's Downloads dir (cross-platform), falling back to
         # the home directory if Downloads doesn't exist.
-        export_dir = s._get_downloads_dir()
+        export_dir = os.path.normpath(s._get_downloads_dir())
         safe_title = re.sub(r"[^\w\-]", "_", request.title)[:60] or "export"
-        export_path = os.path.join(export_dir, f"{safe_title}_Export.zip")
+        export_path = os.path.normpath(os.path.join(export_dir, f"{safe_title}_Export.zip"))
+        # The title is reduced to word characters and dashes; also prove the file lands directly
+        # in the Downloads folder before it is written.
+        if os.path.dirname(export_path) != export_dir or not export_path.startswith(os.path.join(export_dir, "")):
+            raise HTTPException(status_code=400, detail="That export name is not allowed.")
         with open(export_path, "wb") as f:
             f.write(zip_buffer.getvalue())
 
         return {"status": "success", "path": export_path}
 
+    except HTTPException:
+        raise
     except Exception as e:
         logging.error(f"Export Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))

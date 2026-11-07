@@ -48,10 +48,32 @@ test('every page the app can load carries exactly that policy in a meta tag', ()
   }
 });
 
+// Drops HTML comments the way the parser reads them: a comment runs from "<!--" to the first
+// "-->", and an unterminated one runs to the end. One left-to-right pass, so text outside a
+// comment is never reinterpreted (a regex replace can splice a new "<!--" out of the pieces).
+function stripHtmlComments(html) {
+  let out = '';
+  let at = 0;
+  for (;;) {
+    const start = html.indexOf('<!--', at);
+    if (start === -1) return out + html.slice(at);
+    out += html.slice(at, start);
+    const end = html.indexOf('-->', start + 4);
+    if (end === -1) return out;
+    at = end + 3;
+  }
+}
+
+test('stripHtmlComments keeps everything outside comments and nothing inside them', () => {
+  assert.equal(stripHtmlComments('a<!-- x -->b<!--y-->c'), 'abc');
+  assert.equal(stripHtmlComments('a<!-- <script>x</script> -->b'), 'ab');
+  assert.equal(stripHtmlComments('a<!-- unterminated <script>'), 'a');
+  assert.equal(stripHtmlComments('<script src="x.js"></script>'), '<script src="x.js"></script>');
+});
+
 test('no page has an inline classic script, an inline event handler or a remote script', () => {
   for (const page of RENDERER_PAGES) {
-    const html = fs.readFileSync(path.join(RENDERER, page), 'utf8')
-      .replace(/<!--[\s\S]*?-->/g, '');
+    const html = stripHtmlComments(fs.readFileSync(path.join(RENDERER, page), 'utf8'));
     for (const m of html.matchAll(/<script\b([^>]*)>/gi)) {
       const attrs = m[1];
       const src = /\bsrc="([^"]*)"/.exec(attrs)?.[1];
