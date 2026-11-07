@@ -30,7 +30,9 @@ def _isolate(monkeypatch):
 def test_finds_wheel_bins_and_prepends_them_to_path_once(tmp_path, monkeypatch):
     runtime = _make_runtime(tmp_path / "nvidia")
     monkeypatch.setattr(cuda_runtime, "_candidate_roots", lambda: [runtime])
-    monkeypatch.setenv("PATH", "C:\\existing")
+    # A path without a drive letter: "C:\\existing" splits in two on os.pathsep (":") off Windows.
+    existing = str(tmp_path / "existing")
+    monkeypatch.setenv("PATH", existing)
 
     first = cuda_runtime.ensure_cuda_libraries_on_path()
     second = cuda_runtime.ensure_cuda_libraries_on_path()
@@ -41,7 +43,7 @@ def test_finds_wheel_bins_and_prepends_them_to_path_once(tmp_path, monkeypatch):
     parts = os.environ["PATH"].split(os.pathsep)
     assert parts[:2] == expected
     assert parts.count(expected[0]) == 1  # idempotent: never prepended twice
-    assert parts[-1] == "C:\\existing"
+    assert parts[-1] == existing
 
 
 def test_requires_both_cublas_and_cudnn(tmp_path, monkeypatch):

@@ -100,7 +100,9 @@ test('resolves the Windows onedir executable at the deterministic nested path', 
   const backendDir = path.join(resourcesPath, 'backend', 'betterfingers-backend');
   fs.mkdirSync(backendDir, { recursive: true });
   const exePath = path.join(backendDir, 'betterfingers-backend.exe');
-  fs.writeFileSync(exePath, 'windows payload');
+  // 0o755 so the path lookup is what is tested on every OS: Windows ignores the mode, and on
+  // Linux/macOS the resolver rightly refuses a file without +x (the test above).
+  fs.writeFileSync(exePath, 'windows payload', { mode: 0o755 });
 
   withResourcesPath(resourcesPath, () => {
     assert.equal(resolveBackendExecutable(), exePath);
