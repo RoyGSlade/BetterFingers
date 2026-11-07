@@ -232,7 +232,8 @@ SERVERS_DIRNAME = "mcp-servers"
 _MOUNT_SYSTEM_ROOTS = ("/usr", "/opt", "/nix/store")
 # Never mounted, whatever is asked: host services and sockets, process and kernel filesystems,
 # devices, shared temporary folders and host configuration (the fixed /etc files are separate).
-_NEVER_MOUNTED = ("/run", "/var/run", "/proc", "/sys", "/dev", "/tmp", "/var/tmp", "/etc")
+# (bandit B108: these are paths REFUSED as mounts; nothing here creates or writes a temp file.)
+_NEVER_MOUNTED = ("/run", "/var/run", "/proc", "/sys", "/dev", "/tmp", "/var/tmp", "/etc")  # nosec B108
 _SERVER_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 
 
@@ -354,7 +355,8 @@ def _bwrap_profile(command, args, *, home, network, binds, env):
     wrapped += ["--tmpfs", home]
     for path in binds:
         wrapped += ["--ro-bind-try", path, path]
-    wrapped += ["--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp"]
+    # (bandit B108: "/tmp" is the mount point of a fresh, private tmpfs inside the sandbox.)
+    wrapped += ["--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp"]  # nosec B108
     wrapped.append("--clearenv")
     for name, value in env.items():
         wrapped += ["--setenv", name, value]
@@ -362,7 +364,8 @@ def _bwrap_profile(command, args, *, home, network, binds, env):
 
 
 def _inside_env(spec, *, home, environ):
-    env = {"PATH": TRUSTED_PATH, "HOME": home, "TMPDIR": "/tmp"}
+    # (bandit B108: inside the sandbox /tmp is that private tmpfs, not the host's /tmp.)
+    env = {"PATH": TRUSTED_PATH, "HOME": home, "TMPDIR": "/tmp"}  # nosec B108
     for name, value in environ.items():
         upper = str(name).upper()
         if upper in ("LANG", "LANGUAGE", "TZ", "TERM") or upper.startswith("LC_"):
