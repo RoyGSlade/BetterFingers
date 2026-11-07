@@ -106,6 +106,36 @@ async function runCase(name, lines, expectTitle, workflowName) {
   return { name, lines: lines.length, geometry, screen: screenSize(), png, result, approvePosted: posted.includes('/workflows/approve') };
 }
 
+// Round 5, item 3: any broker call against a fixed fake backend, dismissed with Escape like above.
+async function runBrokerCase(name, expectTitle, routes, call) {
+  const posted = [];
+  const backend = {
+    async send(method, route) {
+      if (method !== 'GET' && !route.endsWith('/preview')) posted.push(`${method} ${route}`);
+      return routes[`${method} ${route}`] || { ok: true, status: 200, body: {} };
+    },
+  };
+  const broker = createApprovalBroker({ secret: Buffer.alloc(32, 7), dialog, backend });
+  const pending = call(broker);
+  let geometry = null;
+  for (let i = 0; i < 40 && !geometry; i += 1) { await sleep(150); geometry = windowGeometry(expectTitle); }
+  await sleep(600);
+  const png = path.join(outDir, `${name}.png`);
+  screenshot(png);
+  if (geometry) execFileSync('xdotool', ['windowfocus', '--sync', geometry.id]);
+  execFileSync('xdotool', ['key', 'Escape']);
+  const result = await Promise.race([pending, sleep(8000).then(() => ({ timedOut: true }))]);
+  return { name, geometry, screen: screenSize(), png, result, approvePosted: posted.length > 0, posted };
+}
+
+// The 22 kinds of data "Clear personal data" deletes, by their real labels (data_categories.py).
+const PERSONAL_DATA_LABELS = ['Raw recordings', 'Draft JSON', 'Transcription history (SQLite)',
+  'Temporary audio & conversion artifacts', 'Learned persona examples', 'Contacts', 'Cloned voices & metadata', 'Personas',
+  'Personal dictionary', 'Macros', 'Personal profile (vibe, work style, hobbies)', 'Wake models & training artifacts',
+  'Audio privacy recovery journal', 'MCP configuration', 'Graph data', 'Debug log', 'Sidecar backend raw log',
+  'Application profiles & pins', 'Launch workflows & run history', 'Confirmed applications', 'Controller bindings',
+  'Stream Deck configuration'];
+
 app.whenReady().then(async () => {
   const report = { electron: process.versions.electron, cases: [] };
   try {
@@ -137,6 +167,19 @@ app.whenReady().then(async () => {
     await sleep(700);
     const overBudget = Array.from({ length: MAX_DISPLAY_LINES + 10 }, (_, i) => `${i + 1}. step`);
     report.cases.push(await runCase('over-budget', overBudget, 'Approve workflow'));
+    await sleep(700);
+    // Round 5, item 3: a wipe names every kind of data it deletes. The real 22 labels of "Clear
+    // personal data" must fit the real dialog with its buttons on screen.
+    const categories = PERSONAL_DATA_LABELS.map((label, i) => ({ id: `c${i}`, label }));
+    report.cases.push(await runBrokerCase('wipe-personal-data', 'Clear personal data', {
+      'GET /privacy/modes': { ok: true, status: 200, body: { ok: true, modes: { clear_personal_data: { categories } } } },
+    }, (broker) => broker.wipePrivacy({ mode: 'clear_personal_data', wipeVoices: false })));
+    await sleep(700);
+    // ...and a persona's learned list too long to show gets the Close-only notice, nothing signed.
+    const examples = Array.from({ length: 30 }, (_, i) => ({ id: `e${i}`, raw: `said ${i}`, out: `Became ${i}.` }));
+    report.cases.push(await runBrokerCase('learned-clear-too-many', 'Clear learned examples', {
+      'GET /personas/Coach/examples': { ok: true, status: 200, body: { examples } },
+    }, (broker) => broker.clearLearnedExamples({ persona: 'Coach' })));
   } catch (error) {
     report.error = String(error && error.stack || error);
   }

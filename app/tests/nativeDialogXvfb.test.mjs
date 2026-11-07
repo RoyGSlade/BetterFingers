@@ -69,6 +69,18 @@ for (const size of SIZES) {
     assert.ok(over.geometry.height < 400, 'it is the short Close-only notice, not the content');
     assert.match(String(over.result.error), /too long to review/);
     assert.equal(over.approvePosted, false);
+    // Round 5, item 3: the real 22 wipe labels fit an approving dialog; a learned list too long to
+    // show gets the short Close-only notice and nothing is forwarded.
+    const wipe = byName['wipe-personal-data'];
+    assert.ok(wipe && wipe.geometry, 'wipe-personal-data: a dialog was shown');
+    assert.ok(wipe.geometry.y + wipe.geometry.height <= wipe.screen.height, `wipe-personal-data: ${wipe.geometry.height}px tall on a ${wipe.screen.height}px screen`);
+    assert.match(String(wipe.result.error), /You cancelled/, 'wipe-personal-data: an approving dialog, dismissed with Escape');
+    assert.equal(wipe.approvePosted, false);
+    const many = byName['learned-clear-too-many'];
+    assert.ok(many && many.geometry, 'learned-clear-too-many: a dialog was shown');
+    assert.ok(many.geometry.height < 400, 'learned-clear-too-many: the short Close-only notice');
+    assert.match(String(many.result.error), /Too many to show here/);
+    assert.equal(many.approvePosted, false);
     if (!process.env.BF_NATIVE_DIALOG_OUT) fs.rmSync(base, { recursive: true, force: true });
   });
 }
